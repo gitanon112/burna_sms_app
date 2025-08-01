@@ -177,7 +177,7 @@ class AuthProvider with ChangeNotifier {
     } catch (e) {
       _errorMessage = 'Error updating profile: $e';
       notifyListeners();
-      throw e;
+      rethrow;
     }
   }
 
@@ -199,8 +199,4 @@ class AuthProvider with ChangeNotifier {
   String? get userId => _supabaseService.currentUser?.id;
 
   // Dispose method for cleanup
-  @override
-  void dispose() {
-    super.dispose();
-  }
 }

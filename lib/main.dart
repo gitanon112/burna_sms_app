@@ -15,7 +15,7 @@ void main() async {
 }
 
 class BurnaSMSApp extends StatelessWidget {
-  const BurnaSMSApp({Key? key}) : super(key: key);
+  const BurnaSMSApp({super.key});
 
   @override
   Widget build(BuildContext context) {
