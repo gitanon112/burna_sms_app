@@ -1,6 +1,4 @@
-import 'dart:convert';
 import 'package:http/http.dart' as http;
-import '../constants/app_constants.dart';
 import '../models/service_data.dart';
 import '../models/rental.dart';
 import 'burna_service.dart';
@@ -102,5 +100,20 @@ class DaisyProxyService {
     } catch (e) {
       return false;
     }
+  }
+
+  // Start expiry monitoring
+  void startExpiryMonitoring() {
+    _burnaService.startExpiryMonitoring();
+  }
+
+  // Stop expiry monitoring
+  void stopExpiryMonitoring() {
+    _burnaService.stopExpiryMonitoring();
+  }
+
+  // Force check expired rentals
+  Future<void> checkExpiredRentals() async {
+    await _burnaService.checkExpiredRentals();
   }
 }

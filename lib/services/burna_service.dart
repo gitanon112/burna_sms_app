@@ -14,14 +14,22 @@ class BurnaService {
 
   final SupabaseService _supabaseService = SupabaseService();
   DaisySMSClient? _daisyClient;
+  Timer? _expiryTimer;
   
   // Business configuration
   static const double markupMultiplier = 2.0;
-  static const String daisyApiKey = 'XoEP1JKgg3XRqwq9D6XlfkE3yVTP0n'; // From .env file
+  // TODO: Inject this from secure config (e.g., remote config, Supabase function, or dotenv in dev)
+  static const String daisyApiKey = String.fromEnvironment('DAISY_API_KEY', defaultValue: '');
   
   // Initialize DaisySMS client
   void _ensureDaisyClient() {
-    _daisyClient ??= DaisySMSClient(apiKey: daisyApiKey);
+    if (_daisyClient == null) {
+      if (daisyApiKey.isEmpty) {
+        // Fail fast with clear error to avoid using a leaked key in source
+        throw Exception('Daisy API key is not configured. Provide DAISY_API_KEY via --dart-define or secure config.');
+      }
+      _daisyClient = DaisySMSClient(apiKey: daisyApiKey);
+    }
   }
 
   /// Get available services with Burna pricing (2x markup)
@@ -41,29 +49,44 @@ class BurnaService {
         final serviceCode = entry.key;
         final countries = entry.value;
         final processedCountries = <String, CountryService>{};
-        
+
+        // Build countries -> CountryService and try to capture a readable service name
+        String? inferredServiceName;
+
         for (final countryEntry in countries.entries) {
           final countryCode = countryEntry.key;
           final pricing = countryEntry.value;
-          
+
           if (!pricing.available) continue;
-          
+
           final originalPrice = pricing.price;
           final burnaPrice = (originalPrice * markupMultiplier).toStringAsFixed(2);
-          
+
+          // Use Daisy-provided service name if present on pricing.name
+          if ((pricing.name ?? '').trim().isNotEmpty && inferredServiceName == null) {
+            inferredServiceName = pricing.name!.trim();
+          }
+
+          final resolvedCountryName = _getCountryName(countryCode);
+
           processedCountries[countryCode] = CountryService(
             originalPrice: originalPrice,
             burnaPrice: double.parse(burnaPrice),
             available: pricing.available,
             count: pricing.count,
-            name: _getCountryName(countryCode),
+            name: resolvedCountryName,
           );
         }
-        
+
         if (processedCountries.isNotEmpty) {
+          final serviceDisplayName =
+              (inferredServiceName != null && inferredServiceName!.isNotEmpty)
+                  ? inferredServiceName!
+                  : serviceCode.toUpperCase();
+
           burnaServices[serviceCode] = ServiceData(
             serviceCode: serviceCode,
-            name: serviceCode.toUpperCase(),
+            name: serviceDisplayName,
             countries: processedCountries,
           );
         }
@@ -198,7 +221,7 @@ class BurnaService {
     }
   }
 
-  /// Cancel a rental
+  /// Cancel a rental (user-initiated)
   Future<bool> cancelRental(String rentalId) async {
     _ensureDaisyClient();
     
@@ -218,7 +241,7 @@ class BurnaService {
       final success = await _daisyClient!.cancelRental(rental.daisyRentalId);
       
       if (success) {
-        // Update rental status
+        // Update rental status to cancelled per DB constraint
         await _supabaseService.updateRental(
           rentalId,
           {'status': 'cancelled'},
@@ -304,9 +327,68 @@ class BurnaService {
     }
   }
 
-  /// Get country name from country code
+  /// Start periodic expiry checking
+  void startExpiryMonitoring() {
+    _expiryTimer?.cancel();
+    _expiryTimer = Timer.periodic(const Duration(minutes: 1), (timer) {
+      _handleExpiredRentals();
+    });
+  }
+
+  /// Stop expiry monitoring
+  void stopExpiryMonitoring() {
+    _expiryTimer?.cancel();
+    _expiryTimer = null;
+  }
+
+  /// Check and handle expired rentals (system-initiated expiration)
+  Future<void> _handleExpiredRentals() async {
+    _ensureDaisyClient();
+    
+    final currentUser = _supabaseService.currentUser;
+    if (currentUser == null) return;
+    
+    try {
+      print('BurnaService: Checking for expired rentals...');
+      final rentals = await _supabaseService.getUserRentals();
+      final now = DateTime.now();
+      
+      final expiredRentals = rentals.where((rental) =>
+        rental.status == 'active' && rental.expiresAt.isBefore(now)
+      ).toList();
+      
+      if (expiredRentals.isEmpty) return;
+      
+      print('BurnaService: Found ${expiredRentals.length} expired rentals');
+      
+      for (final rental in expiredRentals) {
+        try {
+          // Cancel on DaisySMS (status=8) and then mark as expired in DB (allowed per constraint)
+          await _daisyClient!.cancelRental(rental.daisyRentalId);
+
+          await _supabaseService.updateRental(
+            rental.id,
+            {'status': 'expired'},
+          );
+
+          print('BurnaService: Expired rental ${rental.id} - ${rental.phoneNumber}');
+        } catch (e) {
+          print('BurnaService: Error handling expired rental ${rental.id}: $e');
+        }
+      }
+    } catch (e) {
+      print('BurnaService: Error checking expired rentals: $e');
+    }
+  }
+
+  /// Force check expired rentals (manual trigger)
+  Future<void> checkExpiredRentals() async {
+    await _handleExpiredRentals();
+  }
+
+  /// Get country/region name from Daisy code
   String _getCountryName(String countryCode) {
-    final countries = {
+    final countries = const {
       '0': 'Any Country',
       '1': 'United States',
       '7': 'Russia',
@@ -327,6 +409,12 @@ class BurnaService {
       '48': 'Poland',
     };
     
-    return countries[countryCode] ?? 'Country $countryCode';
+    // TODO: Extend with Daisy-specific mapping (e.g., '187') from Daisy documentation.
+    return countries[countryCode] ?? 'Region $countryCode';
+  }
+
+  /// Cleanup resources
+  void dispose() {
+    stopExpiryMonitoring();
   }
 }

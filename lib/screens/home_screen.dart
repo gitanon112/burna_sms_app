@@ -20,22 +20,34 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   late TabController _tabController;
   final SupabaseService _supabaseService = SupabaseService();
   final DaisyProxyService _daisyService = DaisyProxyService();
+  final TextEditingController _searchController = TextEditingController();
   
   List<ServiceData> _availableServices = [];
+  List<ServiceData> _filteredServices = [];
   List<Rental> _activeRentals = [];
   bool _isLoading = false;
+  bool _showAllServices = false;
   String? _errorMessage;
+  String _searchQuery = '';
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
     _loadInitialData();
+    
+    // Start expiry monitoring for rentals
+    _daisyService.startExpiryMonitoring();
   }
 
   @override
   void dispose() {
     _tabController.dispose();
+    _searchController.dispose();
+    
+    // Stop expiry monitoring when the screen is disposed
+    _daisyService.stopExpiryMonitoring();
+    
     super.dispose();
   }
 
@@ -68,10 +80,92 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       final servicesResponse = await _daisyService.getAvailableServices();
       setState(() {
         _availableServices = servicesResponse.availableServices;
+        _filterServices();
       });
     } catch (e) {
       debugPrint('Error loading services: $e');
     }
+  }
+
+  void _filterServices() {
+    if (_searchQuery.isEmpty) {
+      if (_showAllServices) {
+        _filteredServices = _availableServices;
+      } else {
+        // Show only popular services by default
+        _filteredServices = _getPopularServices();
+      }
+    } else {
+      _filteredServices = _availableServices.where((service) {
+        return service.name.toLowerCase().contains(_searchQuery.toLowerCase()) ||
+               service.serviceCode.toLowerCase().contains(_searchQuery.toLowerCase());
+      }).toList();
+    }
+  }
+
+  List<ServiceData> _getPopularServices() {
+    final popularServiceCodes = [
+      'google', 'gmail', 'youtube',
+      'facebook', 'meta', 'instagram', 'whatsapp',
+      'twitter', 'x.com',
+      'telegram',
+      'discord',
+      'microsoft', 'outlook', 'hotmail',
+      'apple', 'icloud',
+      'amazon',
+      'uber',
+      'netflix',
+      'spotify',
+      'paypal',
+      'tinder',
+      'linkedin',
+      'github',
+      'dropbox',
+      'steam',
+      'blizzard',
+      'openai',
+    ];
+
+    final popular = <ServiceData>[];
+    final remaining = <ServiceData>[];
+
+    for (final service in _availableServices) {
+      final serviceName = service.name.toLowerCase();
+      final serviceCode = service.serviceCode.toLowerCase();
+      
+      bool isPopular = popularServiceCodes.any((code) =>
+        serviceName.contains(code) || serviceCode.contains(code));
+
+      if (isPopular) {
+        popular.add(service);
+      } else {
+        remaining.add(service);
+      }
+    }
+
+    // Sort popular by name and add some from remaining if we don't have enough
+    popular.sort((a, b) => a.name.compareTo(b.name));
+    
+    if (popular.length < 20) {
+      remaining.sort((a, b) => a.name.compareTo(b.name));
+      popular.addAll(remaining.take(20 - popular.length));
+    }
+
+    return popular;
+  }
+
+  void _onSearchChanged(String query) {
+    setState(() {
+      _searchQuery = query;
+      _filterServices();
+    });
+  }
+
+  void _toggleShowAll() {
+    setState(() {
+      _showAllServices = !_showAllServices;
+      _filterServices();
+    });
   }
 
   Future<void> _loadActiveRentals() async {
@@ -222,13 +316,170 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
     return RefreshIndicator(
       onRefresh: _loadInitialData,
-      child: ListView.builder(
-        padding: const EdgeInsets.all(16),
-        itemCount: _availableServices.length,
-        itemBuilder: (context, index) {
-          final service = _availableServices[index];
-          return _buildEnhancedServiceCard(service);
-        },
+      child: Column(
+        children: [
+          // Search Bar
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.05),
+                  blurRadius: 4,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Column(
+              children: [
+                // Search Input
+                TextField(
+                  controller: _searchController,
+                  onChanged: _onSearchChanged,
+                  decoration: InputDecoration(
+                    hintText: 'Search for services (Google, Facebook, etc.)',
+                    prefixIcon: Icon(Icons.search, color: Colors.blue.shade600),
+                    suffixIcon: _searchQuery.isNotEmpty
+                        ? IconButton(
+                            icon: Icon(Icons.clear, color: Colors.grey.shade600),
+                            onPressed: () {
+                              _searchController.clear();
+                              _onSearchChanged('');
+                            },
+                          )
+                        : null,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide(color: Colors.blue.shade200),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide(color: Colors.grey.shade300),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide(color: Colors.blue.shade600, width: 2),
+                    ),
+                    filled: true,
+                    fillColor: Colors.grey.shade50,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                  ),
+                ),
+                
+                const SizedBox(height: 12),
+                
+                // Show All / Popular Toggle
+                if (_searchQuery.isEmpty)
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        _showAllServices
+                            ? 'Showing all ${_filteredServices.length} services'
+                            : 'Showing popular services (${_filteredServices.length})',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Colors.grey.shade600,
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: _toggleShowAll,
+                        child: Text(
+                          _showAllServices ? 'Show Popular Only' : 'Show All Services',
+                          style: TextStyle(
+                            color: Colors.blue.shade600,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                
+                if (_searchQuery.isNotEmpty)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Found ${_filteredServices.length} services',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Colors.grey.shade600,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          
+          // Services List
+          Expanded(
+            child: _filteredServices.isEmpty
+                ? _buildEmptySearchState()
+                : ListView.builder(
+                    padding: const EdgeInsets.all(16),
+                    itemCount: _filteredServices.length,
+                    itemBuilder: (context, index) {
+                      final service = _filteredServices[index];
+                      return _buildEnhancedServiceCard(service);
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmptySearchState() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 120,
+              height: 120,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [Colors.grey.shade100, Colors.grey.shade200],
+                ),
+                borderRadius: BorderRadius.circular(60),
+              ),
+              child: Icon(
+                Icons.search_off,
+                size: 64,
+                color: Colors.grey.shade400,
+              ),
+            ),
+            const SizedBox(height: 24),
+            Text(
+              'No services found',
+              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                fontWeight: FontWeight.bold,
+                color: Colors.grey.shade700,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _searchQuery.isNotEmpty
+                  ? 'Try searching for different keywords like "Google", "Facebook", or "Twitter"'
+                  : 'No services are currently available',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: Colors.grey.shade500,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            if (_searchQuery.isNotEmpty) ...[
+              const SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: () {
+                  _searchController.clear();
+                  _onSearchChanged('');
+                },
+                child: const Text('Clear Search'),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }

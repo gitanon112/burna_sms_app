@@ -49,34 +49,42 @@ class DaisySMSClient {
   }
 
   /// Get available services with pricing from DaisySMS
+  /// Also surfaces human-friendly service and country names when provided by Daisy.
   Future<Map<String, Map<String, ServicePricing>>> getServices() async {
     final response = await _makeRequest('getPricesVerification');
-    
     try {
       final data = json.decode(response) as Map<String, dynamic>;
       final services = <String, Map<String, ServicePricing>>{};
-      
+
       for (final entry in data.entries) {
         final serviceCode = entry.key;
         final countries = entry.value as Map<String, dynamic>;
         final serviceCountries = <String, ServicePricing>{};
-        
+
         for (final countryEntry in countries.entries) {
           final countryCode = countryEntry.key;
           final countryData = countryEntry.value as Map<String, dynamic>;
-          
+
+          // Daisy responses typically include:
+          // name, ttl, count, cost, repeatable at the country level.
+          final serviceName = (countryData['name']?.toString() ?? '').trim();
+          final price = double.tryParse(countryData['cost']?.toString() ?? '0') ?? 0.0;
+          final count = int.tryParse(countryData['count']?.toString() ?? '') ?? (countryData['count'] as int? ?? 0);
+          final available = count > 0;
+
           serviceCountries[countryCode] = ServicePricing(
-            price: double.tryParse(countryData['cost']?.toString() ?? '0') ?? 0.0,
-            available: (countryData['count'] as int? ?? 0) > 0,
-            count: countryData['count'] as int? ?? 0,
+            price: price,
+            available: available,
+            count: count,
+            name: serviceName.isNotEmpty ? serviceName : null,
           );
         }
-        
+
         if (serviceCountries.isNotEmpty) {
           services[serviceCode] = serviceCountries;
         }
       }
-      
+
       return services;
     } catch (e) {
       throw Exception('Failed to parse services response: $e');
@@ -150,15 +158,18 @@ class ServicePricing {
   final double price;
   final bool available;
   final int count;
+  // Optional human-friendly service name from Daisy (per-country entry)
+  final String? name;
 
   const ServicePricing({
     required this.price,
     required this.available,
     required this.count,
+    this.name,
   });
 
   @override
-  String toString() => 'ServicePricing(price: $price, available: $available, count: $count)';
+  String toString() => 'ServicePricing(price: $price, available: $available, count: $count, name: $name)';
 }
 
 /// DaisySMS rental information
