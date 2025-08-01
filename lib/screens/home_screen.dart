@@ -77,10 +77,20 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Future<void> _loadActiveRentals() async {
     try {
       final rentals = await _supabaseService.getUserRentals();
+      print('HomeScreen: Loaded ${rentals.length} total rentals from Supabase');
+      
+      for (final rental in rentals) {
+        print('HomeScreen: Rental ${rental.id} - Status: ${rental.status}, Active: ${rental.isActive}, Expired: ${rental.isExpired}, ExpiresAt: ${rental.expiresAt}');
+      }
+      
+      final activeRentals = rentals.where((rental) => rental.isActive && !rental.isExpired).toList();
+      print('HomeScreen: Found ${activeRentals.length} active rentals');
+      
       setState(() {
-        _activeRentals = rentals.where((rental) => rental.isActive && !rental.isExpired).toList();
+        _activeRentals = activeRentals;
       });
     } catch (e) {
+      print('HomeScreen: Error loading rentals: $e');
       debugPrint('Error loading rentals: $e');
     }
   }
@@ -1374,8 +1384,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         countryCode: countryCode,
       );
       
-      // Add to Supabase
-      await _supabaseService.createRental(rental.toJson());
+      // BurnaService.purchaseNumber() already creates the rental in Supabase
+      // No need to create it again here
       await _loadActiveRentals();
       
       if (mounted) {

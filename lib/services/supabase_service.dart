@@ -1,4 +1,5 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../constants/app_constants.dart';
 import '../models/user.dart' as app_user;
 import '../models/rental.dart';
@@ -27,11 +28,17 @@ class SupabaseService {
 
   // Authentication methods
   Future<bool> signInWithGoogle() async {
-    final result = await client.auth.signInWithOAuth(
-      OAuthProvider.google,
-      redirectTo: AppConstants.googleOAuthRedirectUrl,
-    );
-    return result;
+    try {
+      final result = await client.auth.signInWithOAuth(
+        OAuthProvider.google,
+        redirectTo: AppConstants.googleOAuthRedirectUrl,
+        authScreenLaunchMode: LaunchMode.externalApplication,
+      );
+      return result; 
+    } catch (e) {
+      print('Google OAuth error: $e');
+      return false;
+    }
   }
 
   Future<void> signOut() async {
@@ -43,7 +50,7 @@ class SupabaseService {
     if (!isAuthenticated) return null;
 
     final response = await client
-        .from('users')
+        .from('profiles')
         .select()
         .eq('id', currentUser!.id)
         .maybeSingle();
@@ -64,7 +71,7 @@ class SupabaseService {
     };
 
     final response = await client
-        .from('users')
+        .from('profiles')
         .insert(userProfile)
         .select()
         .single();
@@ -74,7 +81,7 @@ class SupabaseService {
 
   Future<app_user.User> updateUserProfile(app_user.User user) async {
     final response = await client
-        .from('users')
+        .from('profiles')
         .update(user.toJson())
         .eq('id', user.id)
         .select()
