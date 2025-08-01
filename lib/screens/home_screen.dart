@@ -3,7 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../services/auth_provider.dart';
 import '../services/supabase_service.dart';
-import '../services/daisy_proxy_service.dart';
+import '../services/burna_service.dart';
 import '../models/user.dart' as app_user;
 import '../models/rental.dart';
 import '../models/service_data.dart';
@@ -19,7 +19,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   late TabController _tabController;
   final SupabaseService _supabaseService = SupabaseService();
-  final DaisyProxyService _daisyService = DaisyProxyService();
+  final BurnaService _daisyService = BurnaService();
   final TextEditingController _searchController = TextEditingController();
   
   List<ServiceData> _availableServices = [];
@@ -177,7 +177,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         print('HomeScreen: Rental ${rental.id} - Status: ${rental.status}, Active: ${rental.isActive}, Expired: ${rental.isExpired}, ExpiresAt: ${rental.expiresAt}');
       }
       
-      final activeRentals = rentals.where((rental) => rental.isActive && !rental.isExpired).toList();
+      // Define "active" strictly by status per DB constraint, not by time.
+      // The expiry monitor will flip status to 'expired' after time passes.
+      final activeRentals = rentals.where((rental) => rental.status.toLowerCase() == 'active').toList();
       print('HomeScreen: Found ${activeRentals.length} active rentals');
       
       setState(() {
