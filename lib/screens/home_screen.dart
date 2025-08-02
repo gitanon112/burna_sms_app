@@ -25,6 +25,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   List<ServiceData> _availableServices = [];
   List<ServiceData> _filteredServices = [];
   List<Rental> _activeRentals = [];
+  List<Rental> _historyRentals = [];
   bool _isLoading = false;
   bool _showAllServices = false;
   String? _errorMessage;
@@ -173,18 +174,41 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       final rentals = await _supabaseService.getUserRentals();
       print('HomeScreen: Loaded ${rentals.length} total rentals from Supabase');
       
+      final nowUtc = DateTime.now().toUtc();
       for (final rental in rentals) {
-        print('HomeScreen: Rental ${rental.id} - Status: ${rental.status}, Active: ${rental.isActive}, Expired: ${rental.isExpired}, ExpiresAt: ${rental.expiresAt}');
+        final expiresUtc = rental.expiresAt.toUtc();
+        final expiredFlag = expiresUtc.isBefore(nowUtc);
+        final status = rental.status.toLowerCase();
+        print('HomeScreen: Rental ${rental.id} - Status: ${rental.status}, Active: ${status == 'active'}, ExpiredByTime(UTC): $expiredFlag, ExpiresAt(UTC): $expiresUtc');
       }
-      
-      // Define "active" strictly by status per DB constraint, not by time.
-      // The expiry monitor will flip status to 'expired' after time passes.
-      final activeRentals = rentals.where((rental) => rental.status.toLowerCase() == 'active').toList();
-      print('HomeScreen: Found ${activeRentals.length} active rentals');
-      
-      setState(() {
-        _activeRentals = activeRentals;
-      });
+
+      // My Numbers: active and not expired by time (with grace)
+      const int kExpiryGraceSeconds = 120;
+      final active = rentals.where((r) {
+        final isActive = r.status.toLowerCase() == 'active';
+        final expiresUtc = r.expiresAt.toUtc();
+        // Consider still active if not past expiry minus grace
+        final expiredByTime = expiresUtc.isBefore(nowUtc.subtract(const Duration(seconds: kExpiryGraceSeconds)));
+        return isActive && !expiredByTime;
+      }).toList();
+
+      // History: everything else (cancelled, completed, or active-but-expired-by-time with grace)
+      final history = rentals.where((r) {
+        final status = r.status.toLowerCase();
+        final isActive = status == 'active';
+        final expiredByTimeWithGrace = r.expiresAt.toUtc().isBefore(nowUtc.subtract(const Duration(seconds: kExpiryGraceSeconds)));
+        final isTerminal = status == 'cancelled' || status == 'completed';
+        return isTerminal || (isActive && expiredByTimeWithGrace);
+      }).toList();
+
+      print('HomeScreen: Found ${active.length} active rentals; ${history.length} history rentals');
+
+      if (mounted) {
+        setState(() {
+          _activeRentals = active;
+          _historyRentals = history;
+        });
+      }
     } catch (e) {
       print('HomeScreen: Error loading rentals: $e');
       debugPrint('Error loading rentals: $e');
@@ -805,32 +829,33 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   Widget _buildActiveRentalsTab() {
-    if (_activeRentals.isEmpty) {
-      return _buildEmptyState(
-        icon: Icons.phone_disabled,
-        title: 'No Active Rentals',
-        subtitle: 'Purchase a phone number to get started and manage your SMS receiving',
-        actionText: 'Browse Services',
-        onAction: () => _tabController.animateTo(0),
-      );
-    }
-
     return RefreshIndicator(
       onRefresh: _loadActiveRentals,
-      child: ListView.builder(
-        padding: const EdgeInsets.all(16),
-        itemCount: _activeRentals.length,
-        itemBuilder: (context, index) {
-          final rental = _activeRentals[index];
-          return _buildEnhancedRentalCard(rental);
-        },
-      ),
+      child: _activeRentals.isEmpty
+          ? _buildEmptyState(
+              icon: Icons.phone_disabled,
+              title: 'No Active Rentals',
+              subtitle: 'Purchase a phone number to get started and manage your SMS receiving',
+              actionText: 'Browse Services',
+              onAction: () => _tabController.animateTo(0),
+            )
+          : ListView.builder(
+              padding: const EdgeInsets.all(16),
+              itemCount: _activeRentals.length,
+              itemBuilder: (context, index) {
+                final rental = _activeRentals[index];
+                return _buildEnhancedRentalCard(rental);
+              },
+            ),
     );
   }
 
   Widget _buildEnhancedRentalCard(Rental rental) {
-    final isExpired = rental.expiresAt.isBefore(DateTime.now());
-    final timeRemaining = rental.expiresAt.difference(DateTime.now());
+    // Use UTC now for consistency with DB-stored Z timestamps
+    final nowUtc = DateTime.now().toUtc();
+    final expiresUtc = rental.expiresAt.toUtc();
+    final isExpired = expiresUtc.isBefore(nowUtc);
+    final timeRemaining = expiresUtc.difference(nowUtc);
     final statusColor = _getStatusColor(rental.status);
     final hasReceivedSms = rental.smsReceived != null && rental.smsReceived!.isNotEmpty;
     
@@ -1268,14 +1293,76 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   Widget _buildHistoryTab() {
-    // This would show completed/expired rentals
-    // For now, show a placeholder with enhanced empty state
-    return _buildEmptyState(
-      icon: Icons.history,
-      title: 'Rental History',
-      subtitle: 'Your completed and expired rentals will appear here once you start using the service',
-      actionText: 'Get Started',
-      onAction: () => _tabController.animateTo(0),
+    return RefreshIndicator(
+      onRefresh: _loadActiveRentals,
+      child: _historyRentals.isEmpty
+          ? _buildEmptyState(
+              icon: Icons.history,
+              title: 'No History Yet',
+              subtitle: 'Your completed and cancelled rentals will appear here',
+              actionText: 'Browse Services',
+              onAction: () => _tabController.animateTo(0),
+            )
+          : ListView.builder(
+              padding: const EdgeInsets.all(16),
+              itemCount: _historyRentals.length,
+              itemBuilder: (context, index) {
+                final rental = _historyRentals[index];
+                return _buildHistoryRentalCard(rental);
+              },
+            ),
+    );
+  }
+
+  Widget _buildHistoryRentalCard(Rental rental) {
+    final statusColor = _getStatusColor(rental.status);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade50,
+        borderRadius: BorderRadius.circular(12),
+        border: Border(left: BorderSide(color: statusColor, width: 4)),
+      ),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        leading: CircleAvatar(
+          backgroundColor: statusColor.withOpacity(0.15),
+          child: Icon(Icons.history, color: statusColor),
+        ),
+        title: Text(
+          rental.phoneNumber,
+          style: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SizedBox(height: 4),
+            Text('${rental.serviceName} • ${rental.countryName}'),
+            const SizedBox(height: 2),
+            Text(
+              'Status: ${rental.status.toUpperCase()}',
+              style: TextStyle(color: statusColor, fontWeight: FontWeight.w600),
+            ),
+            if (rental.smsReceived != null && rental.smsReceived!.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text('SMS: ${rental.smsReceived!}'),
+              ),
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                'Expires: ${rental.expiresAt.toLocal()}',
+                style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+              ),
+            ),
+          ],
+        ),
+        trailing: IconButton(
+          icon: const Icon(Icons.copy),
+          onPressed: () => _copyToClipboard(rental.phoneNumber),
+          tooltip: 'Copy number',
+        ),
+      ),
     );
   }
 

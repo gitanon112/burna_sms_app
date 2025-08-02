@@ -11,6 +11,9 @@ class CountryService {
   final bool available;
   final int count;
   final String name;
+  // Daisy short-term rental TTL in seconds (if known from API)
+  @JsonKey(name: 'ttl_seconds')
+  final int? ttlSeconds;
 
   CountryService({
     required this.originalPrice,
@@ -18,6 +21,7 @@ class CountryService {
     required this.available,
     required this.count,
     required this.name,
+    this.ttlSeconds,
   });
 
   factory CountryService.fromJson(Map<String, dynamic> json) => _$CountryServiceFromJson(json);

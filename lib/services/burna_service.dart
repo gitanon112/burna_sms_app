@@ -56,25 +56,26 @@ class BurnaService {
         for (final countryEntry in countries.entries) {
           final countryCode = countryEntry.key;
           final pricing = countryEntry.value;
-
+ 
           if (!pricing.available) continue;
-
+ 
           final originalPrice = pricing.price;
           final burnaPrice = (originalPrice * markupMultiplier).toStringAsFixed(2);
-
+ 
           // Use Daisy-provided service name if present on pricing.name
           if ((pricing.name ?? '').trim().isNotEmpty && inferredServiceName == null) {
             inferredServiceName = pricing.name!.trim();
           }
-
+ 
           final resolvedCountryName = _getCountryName(countryCode);
-
+ 
           processedCountries[countryCode] = CountryService(
             originalPrice: originalPrice,
             burnaPrice: double.parse(burnaPrice),
             available: pricing.available,
             count: pricing.count,
             name: resolvedCountryName,
+            ttlSeconds: pricing.ttlSeconds, // from Daisy client
           );
         }
 
@@ -132,17 +133,34 @@ class BurnaService {
       
       // Rent number from DaisySMS
       print('BurnaService: Renting number from DaisySMS...');
+      // Set max_price as originalPrice * 1.1 to avoid surprises; 2 decimals
+      final maxPrice = (countryInfo.originalPrice * 1.1);
+      final maxPriceStr = maxPrice.toStringAsFixed(2);
+
       final daisyRental = await _daisyClient!.rentNumber(
         serviceCode,
         country: countryCode,
+        maxPrice: maxPriceStr,
+        // Optional: support long-term via duration if we later expose via UI
+        // duration: '1H',
       );
       
       print('BurnaService: Got number from DaisySMS - ${daisyRental.number} (id: ${daisyRental.id})');
       
       // Create rental in Supabase
       final rentalId = const Uuid().v4();
-      final now = DateTime.now();
-      final expiresAt = now.add(const Duration(hours: 1));
+      // Use UTC for timestamps
+      final now = DateTime.now().toUtc();
+
+      // Align expiry to Daisy TTL if we have it; else default 15 minutes
+      Duration expiryDuration;
+      final maybeTtl = countryInfo.ttlSeconds;
+      if (maybeTtl != null && maybeTtl > 0) {
+        expiryDuration = Duration(seconds: maybeTtl);
+      } else {
+        expiryDuration = const Duration(minutes: 15);
+      }
+      final expiresAt = now.add(expiryDuration);
       
       final rentalData = {
         'id': rentalId,
@@ -351,27 +369,36 @@ class BurnaService {
     try {
       print('BurnaService: Checking for expired rentals...');
       final rentals = await _supabaseService.getUserRentals();
-      final now = DateTime.now();
-      
-      final expiredRentals = rentals.where((rental) =>
-        rental.status == 'active' && rental.expiresAt.isBefore(now)
-      ).toList();
-      
+      final now = DateTime.now().toUtc();
+
+      final expiredRentals = rentals.where((rental) {
+        final expiryUtc = rental.expiresAt.toUtc();
+        return rental.status.toLowerCase() == 'active' && expiryUtc.isBefore(now.subtract(const Duration(minutes: 2)));
+      }).toList();
+
       if (expiredRentals.isEmpty) return;
-      
+
       print('BurnaService: Found ${expiredRentals.length} expired rentals');
-      
+
       for (final rental in expiredRentals) {
         try {
-          // Cancel on DaisySMS (status=8) and then mark as expired in DB (allowed per constraint)
-          await _daisyClient!.cancelRental(rental.daisyRentalId);
+          // Before cancelling, try to see if SMS arrived late
+          final smsContent = await _daisyClient!.getSms(rental.daisyRentalId);
+          if (smsContent != null && smsContent.isNotEmpty) {
+            await _supabaseService.updateRental(
+              rental.id,
+              {
+                'sms_received': smsContent,
+                'status': 'completed',
+              },
+            );
+            print('BurnaService: Completed rental ${rental.id} via late SMS');
+            continue;
+          }
 
-          await _supabaseService.updateRental(
-            rental.id,
-            {'status': 'expired'},
-          );
-
-          print('BurnaService: Expired rental ${rental.id} - ${rental.phoneNumber}');
+          // Graceful: do not auto-cancel if Daisy is still waiting (getSms returns null for waiting)
+          // Skip auto-cancel; leave active for manual user action
+          print('BurnaService: Skipping auto-cancel (grace) for ${rental.id}; leaving active.');
         } catch (e) {
           print('BurnaService: Error handling expired rental ${rental.id}: $e');
         }

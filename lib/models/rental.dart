@@ -103,5 +103,5 @@ class Rental {
   bool get isCompleted => status == 'completed';
   bool get isCancelled => status == 'cancelled';
   bool get hasReceivedSms => smsReceived != null && smsReceived!.isNotEmpty;
-  bool get isExpired => DateTime.now().isAfter(expiresAt);
+  bool get isExpired => DateTime.now().toUtc().isAfter(expiresAt.toUtc());
 }

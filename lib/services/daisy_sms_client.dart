@@ -55,36 +55,39 @@ class DaisySMSClient {
     try {
       final data = json.decode(response) as Map<String, dynamic>;
       final services = <String, Map<String, ServicePricing>>{};
-
+  
       for (final entry in data.entries) {
         final serviceCode = entry.key;
         final countries = entry.value as Map<String, dynamic>;
         final serviceCountries = <String, ServicePricing>{};
-
+  
         for (final countryEntry in countries.entries) {
           final countryCode = countryEntry.key;
           final countryData = countryEntry.value as Map<String, dynamic>;
-
+  
           // Daisy responses typically include:
           // name, ttl, count, cost, repeatable at the country level.
           final serviceName = (countryData['name']?.toString() ?? '').trim();
           final price = double.tryParse(countryData['cost']?.toString() ?? '0') ?? 0.0;
           final count = int.tryParse(countryData['count']?.toString() ?? '') ?? (countryData['count'] as int? ?? 0);
           final available = count > 0;
-
+          // ttl is in seconds per API docs
+          final ttl = int.tryParse(countryData['ttl']?.toString() ?? '') ?? (countryData['ttl'] as int? ?? 0);
+  
           serviceCountries[countryCode] = ServicePricing(
             price: price,
             available: available,
             count: count,
             name: serviceName.isNotEmpty ? serviceName : null,
+            ttlSeconds: ttl > 0 ? ttl : null,
           );
         }
-
+  
         if (serviceCountries.isNotEmpty) {
           services[serviceCode] = serviceCountries;
         }
       }
-
+  
       return services;
     } catch (e) {
       throw Exception('Failed to parse services response: $e');
@@ -92,11 +95,29 @@ class DaisySMSClient {
   }
 
   /// Rent a number from DaisySMS
-  Future<DaisyRental> rentNumber(String service, {String country = '0'}) async {
-    final response = await _makeRequest('getNumber', extraParams: {
+  /// Supports max_price, duration (e.g., '12H','1D'), auto_renew ('0'/'1'), carriers, areas.
+  Future<DaisyRental> rentNumber(
+    String service, {
+    String country = '0',
+    String? maxPrice,
+    String? duration,
+    String? autoRenew,
+    String? carriers,
+    String? areas,
+    String? number,
+  }) async {
+    final params = <String, String>{
       'service': service,
       'country': country,
-    });
+    };
+    if (maxPrice != null) params['max_price'] = maxPrice;
+    if (duration != null) params['duration'] = duration;
+    if (autoRenew != null) params['auto_renew'] = autoRenew;
+    if (carriers != null) params['carriers'] = carriers;
+    if (areas != null) params['areas'] = areas;
+    if (number != null) params['number'] = number;
+
+    final response = await _makeRequest('getNumber', extraParams: params);
 
     if (response.startsWith('ACCESS_NUMBER:')) {
       final parts = response.split(':');
@@ -160,16 +181,19 @@ class ServicePricing {
   final int count;
   // Optional human-friendly service name from Daisy (per-country entry)
   final String? name;
+  // TTL in seconds for short-term rental, when provided by Daisy
+  final int? ttlSeconds;
 
   const ServicePricing({
     required this.price,
     required this.available,
     required this.count,
     this.name,
+    this.ttlSeconds,
   });
 
   @override
-  String toString() => 'ServicePricing(price: $price, available: $available, count: $count, name: $name)';
+  String toString() => 'ServicePricing(price: $price, available: $available, count: $count, name: $name, ttlSeconds: $ttlSeconds)';
 }
 
 /// DaisySMS rental information
