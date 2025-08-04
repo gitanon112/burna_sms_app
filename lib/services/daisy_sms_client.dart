@@ -136,20 +136,34 @@ class DaisySMSClient {
 
   /// Check for SMS on rented number
   Future<String?> getSms(String rentalId) async {
-    final response = await _makeRequest('getStatus', extraParams: {
-      'id': rentalId,
-    });
+    try {
+      final response = await _makeRequest('getStatus', extraParams: {
+        'id': rentalId,
+      });
 
-    if (response.startsWith('STATUS_OK:')) {
-      final colonIndex = response.indexOf(':');
-      return colonIndex != -1 ? response.substring(colonIndex + 1) : null;
-    } else if (response == 'STATUS_WAIT_CODE' || response == 'STATUS_WAIT_RETRY') {
-      return null; // Still waiting for SMS
+      if (response.startsWith('STATUS_OK:')) {
+        final colonIndex = response.indexOf(':');
+        return colonIndex != -1 ? response.substring(colonIndex + 1) : null;
+      }
+
+      // Waiting states
+      if (response == 'STATUS_WAIT_CODE' || response == 'STATUS_WAIT_RETRY' || response == 'STATUS_WAITING') {
+        return null;
+      }
+
+      // Cancellation/termination states -> no code
+      if (response == 'STATUS_CANCEL' || response == 'ACCESS_CANCEL' || response == 'NO_ACTIVATION' || response == 'ACCESS_READY') {
+        return null;
+      }
+
+      // Unknown status: just log and return null
+      print('DaisySMS getStatus for $rentalId: $response');
+      return null;
+    } catch (e) {
+      // Swallow network/400s here and treat as no message yet, to avoid crashing expiry handler loops
+      print('DaisySMS getStatus error for $rentalId: $e');
+      return null;
     }
-    
-    // Log other statuses but don't throw exception
-    print('DaisySMS getStatus for $rentalId: $response');
-    return null;
   }
 
   /// Cancel a rental on DaisySMS

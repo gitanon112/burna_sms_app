@@ -182,23 +182,23 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         print('HomeScreen: Rental ${rental.id} - Status: ${rental.status}, Active: ${status == 'active'}, ExpiredByTime(UTC): $expiredFlag, ExpiresAt(UTC): $expiresUtc');
       }
 
-      // My Numbers: active and not expired by time (with grace)
-      const int kExpiryGraceSeconds = 120;
+      // My Numbers: active and not expired by time (strict - no grace)
+      // If Daisy TTL has passed, do not show as active.
       final active = rentals.where((r) {
         final isActive = r.status.toLowerCase() == 'active';
         final expiresUtc = r.expiresAt.toUtc();
-        // Consider still active if not past expiry minus grace
-        final expiredByTime = expiresUtc.isBefore(nowUtc.subtract(const Duration(seconds: kExpiryGraceSeconds)));
+        final expiredByTime = expiresUtc.isBefore(nowUtc);
         return isActive && !expiredByTime;
       }).toList();
 
-      // History: everything else (cancelled, completed, or active-but-expired-by-time with grace)
+      // History: everything else (cancelled, completed, or active-but-expired-by-time strict)
+      // Additionally, if an item is time-expired but still marked 'active', we display it as CANCELLED in the card UI to prevent "ACTIVE in history" visuals.
       final history = rentals.where((r) {
         final status = r.status.toLowerCase();
         final isActive = status == 'active';
-        final expiredByTimeWithGrace = r.expiresAt.toUtc().isBefore(nowUtc.subtract(const Duration(seconds: kExpiryGraceSeconds)));
+        final expiredByTime = r.expiresAt.toUtc().isBefore(nowUtc);
         final isTerminal = status == 'cancelled' || status == 'completed';
-        return isTerminal || (isActive && expiredByTimeWithGrace);
+        return isTerminal || (isActive && expiredByTime);
       }).toList();
 
       print('HomeScreen: Found ${active.length} active rentals; ${history.length} history rentals');
@@ -1315,7 +1315,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   Widget _buildHistoryRentalCard(Rental rental) {
-    final statusColor = _getStatusColor(rental.status);
+    // If an item is time-expired but status is still 'active', present it as CANCELLED to avoid confusing "ACTIVE in history"
+    final nowUtc = DateTime.now().toUtc();
+    final isExpiredByTime = rental.expiresAt.toUtc().isBefore(nowUtc);
+    final effectiveStatus = (rental.status.toLowerCase() == 'active' && isExpiredByTime) ? 'cancelled' : rental.status;
+    final statusColor = _getStatusColor(effectiveStatus);
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
       decoration: BoxDecoration(
@@ -1340,7 +1344,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             Text('${rental.serviceName} • ${rental.countryName}'),
             const SizedBox(height: 2),
             Text(
-              'Status: ${rental.status.toUpperCase()}',
+              'Status: ${effectiveStatus.toUpperCase()}',
               style: TextStyle(color: statusColor, fontWeight: FontWeight.w600),
             ),
             if (rental.smsReceived != null && rental.smsReceived!.isNotEmpty)

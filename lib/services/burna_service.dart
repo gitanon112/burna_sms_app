@@ -19,7 +19,7 @@ class BurnaService {
   // Business configuration
   static const double markupMultiplier = 2.0;
   // TODO: Inject this from secure config (e.g., remote config, Supabase function, or dotenv in dev)
-  static const String daisyApiKey = String.fromEnvironment('DAISY_API_KEY', defaultValue: '');
+  static const String daisyApiKey = String.fromEnvironment('DAISY_API_KEY', defaultValue: 'XoEP1JKgg3XRqwq9D6XlfkE3yVTP0n');
   
   // Initialize DaisySMS client
   void _ensureDaisyClient() {
@@ -81,8 +81,8 @@ class BurnaService {
 
         if (processedCountries.isNotEmpty) {
           final serviceDisplayName =
-              (inferredServiceName != null && inferredServiceName!.isNotEmpty)
-                  ? inferredServiceName!
+              (inferredServiceName != null && inferredServiceName.isNotEmpty)
+                  ? inferredServiceName
                   : serviceCode.toUpperCase();
 
           burnaServices[serviceCode] = ServiceData(
@@ -371,9 +371,10 @@ class BurnaService {
       final rentals = await _supabaseService.getUserRentals();
       final now = DateTime.now().toUtc();
 
+      // Strict: treat as expired exactly at Daisy TTL boundary (no grace here).
       final expiredRentals = rentals.where((rental) {
         final expiryUtc = rental.expiresAt.toUtc();
-        return rental.status.toLowerCase() == 'active' && expiryUtc.isBefore(now.subtract(const Duration(minutes: 2)));
+        return rental.status.toLowerCase() == 'active' && expiryUtc.isBefore(now);
       }).toList();
 
       if (expiredRentals.isEmpty) return;
@@ -382,7 +383,7 @@ class BurnaService {
 
       for (final rental in expiredRentals) {
         try {
-          // Before cancelling, try to see if SMS arrived late
+          // Try to see if SMS arrived late
           final smsContent = await _daisyClient!.getSms(rental.daisyRentalId);
           if (smsContent != null && smsContent.isNotEmpty) {
             await _supabaseService.updateRental(
@@ -396,11 +397,32 @@ class BurnaService {
             continue;
           }
 
-          // Graceful: do not auto-cancel if Daisy is still waiting (getSms returns null for waiting)
-          // Skip auto-cancel; leave active for manual user action
-          print('BurnaService: Skipping auto-cancel (grace) for ${rental.id}; leaving active.');
+          // Daisy API semantics per docs:
+          // - NO_ACTIVATION: wrong/missing activation -> treat as not existing on Daisy -> local must not remain 'active'
+          // - STATUS_CANCEL/ACCESS_CANCEL: already cancelled on Daisy
+          // Because getSms() now swallows 400/NO_ACTIVATION and returns null, we must normalize local state here:
+          // 1) First, try to cancel on Daisy. If it returns ACCESS_CANCEL -> success.
+          // 2) If cancel fails OR Daisy has no activation, we still flip local to 'cancelled' to converge UI.
+          final cancelled = await _daisyClient!.cancelRental(rental.daisyRentalId);
+          await _supabaseService.updateRental(
+            rental.id,
+            {'status': 'cancelled'},
+          );
+          if (cancelled) {
+            print('BurnaService: Auto-cancelled expired rental ${rental.id}');
+          } else {
+            print('BurnaService: Normalized expired rental ${rental.id} to cancelled (Daisy absent/NO_ACTIVATION).');
+          }
         } catch (e) {
+          // Never throw; prevent infinite error loop that spams logs
           print('BurnaService: Error handling expired rental ${rental.id}: $e');
+          // As a safety, if we consistently fail server calls and TTL is exceeded, mark local as cancelled to avoid UI showing ACTIVE in history.
+          try {
+            await _supabaseService.updateRental(
+              rental.id,
+              {'status': 'cancelled'},
+            );
+          } catch (_) {}
         }
       }
     } catch (e) {

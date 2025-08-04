@@ -1,5 +1,4 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:url_launcher/url_launcher.dart';
 import '../constants/app_constants.dart';
 import '../models/user.dart' as app_user;
 import '../models/rental.dart';
