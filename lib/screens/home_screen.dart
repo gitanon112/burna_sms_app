@@ -28,6 +28,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
   List<ServiceData> _filteredServices = [];
   List<Rental> _activeRentals = [];
   List<Rental> _historyRentals = [];
+  // Linger map: rentalId -> DateTime when it should stop lingering (keep visible in My Numbers)
+  final Map<String, DateTime> _lingerUntil = {};
   bool _isLoading = false;
   bool _showAllServices = false;
   String? _errorMessage;
@@ -164,69 +166,37 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
 
   void _filterServices() {
     if (_searchQuery.isEmpty) {
-      if (_showAllServices) {
-        _filteredServices = _availableServices;
-      } else {
-        // Show only popular services by default
-        _filteredServices = _getPopularServices();
-      }
+      // Only display curated popular set (USA-only offering)
+      _filteredServices = _getPopularServices();
     } else {
       _filteredServices = _availableServices.where((service) {
-        return service.name.toLowerCase().contains(_searchQuery.toLowerCase()) ||
-               service.serviceCode.toLowerCase().contains(_searchQuery.toLowerCase());
+        final name = service.name.toLowerCase();
+        final code = service.serviceCode.toLowerCase();
+        final allowed = _popularWhitelist().contains(code) || _popularWhitelistByName().any((n) => name.contains(n));
+        return allowed && (name.contains(_searchQuery.toLowerCase()) || code.contains(_searchQuery.toLowerCase()));
       }).toList();
     }
   }
 
+  List<String> _popularWhitelist() => ['whatsapp', 'google', 'twitter', 'instagram', 'facebook'];
+  List<String> _popularWhitelistByName() => ['whatsapp', 'google', 'twitter', 'instagram', 'facebook'];
   List<ServiceData> _getPopularServices() {
-    final popularServiceCodes = [
-      'google', 'gmail', 'youtube',
-      'facebook', 'meta', 'instagram', 'whatsapp',
-      'twitter', 'x.com',
-      'telegram',
-      'discord',
-      'microsoft', 'outlook', 'hotmail',
-      'apple', 'icloud',
-      'amazon',
-      'uber',
-      'netflix',
-      'spotify',
-      'paypal',
-      'tinder',
-      'linkedin',
-      'github',
-      'dropbox',
-      'steam',
-      'blizzard',
-      'openai',
-    ];
-
-    final popular = <ServiceData>[];
-    final remaining = <ServiceData>[];
-
+    final allow = _popularWhitelist();
+    final out = <ServiceData>[];
     for (final service in _availableServices) {
-      final serviceName = service.name.toLowerCase();
-      final serviceCode = service.serviceCode.toLowerCase();
-      
-      bool isPopular = popularServiceCodes.any((code) =>
-        serviceName.contains(code) || serviceCode.contains(code));
-
-      if (isPopular) {
-        popular.add(service);
-      } else {
-        remaining.add(service);
+      final code = service.serviceCode.toLowerCase();
+      final name = service.name.toLowerCase();
+      if (allow.contains(code) || _popularWhitelistByName().any((n) => name.contains(n))) {
+        final firstEntry = service.countries.entries.isNotEmpty ? service.countries.entries.first : null;
+        out.add(ServiceData(
+          serviceCode: service.serviceCode,
+          name: service.name,
+          countries: firstEntry == null ? <String, CountryService>{} : <String, CountryService>{firstEntry.key: firstEntry.value},
+        ));
       }
     }
-
-    // Sort popular by name and add some from remaining if we don't have enough
-    popular.sort((a, b) => a.name.compareTo(b.name));
-    
-    if (popular.length < 20) {
-      remaining.sort((a, b) => a.name.compareTo(b.name));
-      popular.addAll(remaining.take(20 - popular.length));
-    }
-
-    return popular;
+    out.sort((a, b) => a.name.compareTo(b.name));
+    return out;
   }
 
   void _onSearchChanged(String query) {
@@ -249,6 +219,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
       print('HomeScreen: Loaded ${rentals.length} total rentals from Supabase');
       
       final nowUtc = DateTime.now().toUtc();
+      // Clean up expired linger windows
+      _lingerUntil.removeWhere((_, until) => until.isBefore(DateTime.now()));
       for (final rental in rentals) {
         final expiresUtc = rental.expiresAt.toUtc();
         final expiredFlag = expiresUtc.isBefore(nowUtc);
@@ -256,23 +228,28 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
         print('HomeScreen: Rental ${rental.id} - Status: ${rental.status}, Active: ${status == 'active'}, ExpiredByTime(UTC): $expiredFlag, ExpiresAt(UTC): $expiresUtc');
       }
 
-      // My Numbers: active and not expired by time (strict - no grace)
-      // If Daisy TTL has passed, do not show as active.
+      // My Numbers: show
+      // - Active and not expired by time
+      // - Completed AND within linger window (show code for 60s)
       final active = rentals.where((r) {
-        final isActive = r.status.toLowerCase() == 'active';
+        final status = r.status.toLowerCase();
         final expiresUtc = r.expiresAt.toUtc();
         final expiredByTime = expiresUtc.isBefore(nowUtc);
-        return isActive && !expiredByTime;
+        final isActive = status == 'active' && !expiredByTime;
+        final isCompletedAndLingering = status == 'completed' &&
+            _lingerUntil[r.id] != null &&
+            _lingerUntil[r.id]!.isAfter(DateTime.now());
+        return isActive || isCompletedAndLingering;
       }).toList();
 
-      // History: everything else (cancelled, completed, or active-but-expired-by-time strict)
-      // Additionally, if an item is time-expired but still marked 'active', we display it as CANCELLED in the card UI to prevent "ACTIVE in history" visuals.
+      // History: only successful (completed) and NOT currently lingering.
+      // Cancelled or timeout (active but expired) must NOT appear in history per spec.
       final history = rentals.where((r) {
         final status = r.status.toLowerCase();
-        final isActive = status == 'active';
-        final expiredByTime = r.expiresAt.toUtc().isBefore(nowUtc);
-        final isTerminal = status == 'cancelled' || status == 'completed';
-        return isTerminal || (isActive && expiredByTime);
+        final isCompleted = status == 'completed';
+        final isLingering = _lingerUntil[r.id] != null &&
+            _lingerUntil[r.id]!.isAfter(DateTime.now());
+        return isCompleted && !isLingering;
       }).toList();
 
       print('HomeScreen: Found ${active.length} active rentals; ${history.length} history rentals');
@@ -295,116 +272,134 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     final user = authProvider.userProfile;
 
     return Scaffold(
+      backgroundColor: const Color(0xFF0B0F1A),
       appBar: AppBar(
-        title: Row(
-          children: [
-            const Text(AppConstants.appName),
-            const Spacer(),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.15),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Text(
-                '\$${(_walletBalanceCents / 100).toStringAsFixed(2)}',
-                style: const TextStyle(
-                  fontWeight: FontWeight.w600,
-                  color: Colors.white,
-                ),
-              ),
-            ),
-          ],
-        ),
-        backgroundColor: Theme.of(context).colorScheme.primary,
+        backgroundColor: const Color(0xFF0B0F1A),
         foregroundColor: Colors.white,
         elevation: 0,
+        titleSpacing: 0,
+        title: Padding(
+          padding: const EdgeInsets.only(left: 16),
+          child: ShaderMask(
+            shaderCallback: (bounds) => const LinearGradient(
+              colors: [Color(0xFF7C4DFF), Color(0xFF00E5FF)],
+            ).createShader(Rect.fromLTWH(0, 0, 200, 70)),
+            child: const Text(
+              AppConstants.appName,
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w800,
+                fontSize: 22,
+                letterSpacing: 0.5,
+              ),
+            ),
+          ),
+        ),
         actions: [
-          IconButton(
-            tooltip: 'Top up \$5',
-            icon: const Icon(Icons.account_balance_wallet_outlined),
-            onPressed: () async {
-              try {
-                final completed = await BillingService().topUpWalletCents(500);
-
-                if (!mounted) return;
-
-                if (!completed) {
-                  // User canceled the payment sheet; show subtle info and exit without red error.
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Payment canceled'),
-                      backgroundColor: Colors.grey,
-                      duration: Duration(seconds: 2),
-                    ),
-                  );
-                  return;
-                }
-
-                // Payment sheet completed; webhook will credit the wallet asynchronously.
-                // Inform user and start polling the wallet balance briefly to reflect the change.
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Payment completed. Balance will update shortly.'),
-                    backgroundColor: Colors.green,
+          // Wallet pill
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Container(
+              margin: const EdgeInsets.only(right: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF1DE9B6), Color(0xFF00BCD4)],
+                ),
+                borderRadius: BorderRadius.circular(22),
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFF00BCD4).withOpacity(0.3),
+                    blurRadius: 12,
+                    spreadRadius: 1,
+                    offset: const Offset(0, 3),
                   ),
-                );
+                ],
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.account_balance_wallet_rounded, color: Colors.black, size: 18),
+                  const SizedBox(width: 6),
+                  Text(
+                    '\$${(_walletBalanceCents / 100).toStringAsFixed(2)}',
+                    style: const TextStyle(
+                      color: Colors.black,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          IconButton(
+            tooltip: 'Add funds',
+            icon: const Icon(Icons.add_card_rounded, color: Colors.white),
+            onPressed: () async {
+              // Prompt for any amount in USD
+              final controller = TextEditingController(text: '5.00');
+              final amount = await showDialog<double?>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('Add Funds'),
+                  content: TextField(
+                    controller: controller,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(
+                      labelText: 'Amount (USD)',
+                      hintText: 'e.g. 5.00',
+                    ),
+                  ),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(ctx, null), child: const Text('Cancel')),
+                    ElevatedButton(
+                      onPressed: () {
+                        final v = double.tryParse(controller.text.trim());
+                        Navigator.pop(ctx, v);
+                      },
+                      child: const Text('Continue'),
+                    ),
+                  ],
+                ),
+              );
 
-                final startBalance = _walletBalanceCents;
-                // Immediate hard refresh to pick up webhook credit as soon as it lands
-                try {
-                  final fresh = await _supabaseService.hardRefreshWalletBalanceCents();
-                  if (mounted) {
-                    setState(() => _walletBalanceCents = fresh);
-                  }
-                } catch (_) {}
-                const totalWait = Duration(seconds: 30);
-                const step = Duration(seconds: 3);
-                var waited = Duration.zero;
-
-                while (waited < totalWait) {
-                  await Future.delayed(step);
-                  await _refreshWallet();
-                  if (_walletBalanceCents > startBalance) break;
-                  waited += step;
-                }
-
-                await _loadActiveRentals();
-
+              if (amount == null) return;
+              final cents = (amount * 100).round();
+              if (cents <= 0) {
                 if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Enter a valid amount'), backgroundColor: Colors.orange),
+                );
+                return;
+              }
 
-                if (_walletBalanceCents > startBalance) {
+              try {
+                final opened = await BillingService().openExternalCheckout(amountCents: cents);
+                if (!mounted) return;
+                if (opened) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Balance updated.'),
-                      backgroundColor: Colors.green,
-                      duration: Duration(seconds: 2),
-                    ),
-                  );
-                } else {
-                  // Webhook lagged; allow manual refresh
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text("Payment processed. Pull to refresh if balance hasn\u0027t updated yet."),
-                      backgroundColor: Colors.blueGrey,
-                      duration: Duration(seconds: 3),
-                    ),
+                    const SnackBar(content: Text('Opening secure Checkout...'), backgroundColor: Colors.blue),
                   );
                 }
               } catch (e) {
                 if (!mounted) return;
                 ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text('Payment failed: $e'),
-                    backgroundColor: Colors.red,
-                  ),
+                  SnackBar(content: Text('Unable to open Checkout: $e'), backgroundColor: Colors.red),
                 );
               }
             },
           ),
+          // Profile circle menu
           PopupMenuButton<String>(
+            icon: const CircleAvatar(
+              radius: 16,
+              backgroundColor: Color(0xFF12192E),
+              child: Icon(Icons.person, color: Colors.white),
+            ),
             onSelected: (value) async {
               switch (value) {
+                case 'history':
+                  _tabController.animateTo(2);
+                  break;
                 case 'profile':
                   _showProfileDialog(context, user);
                   break;
@@ -413,11 +408,20 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
                   await _refreshWallet();
                   break;
                 case 'logout':
+                  final authProvider = Provider.of<AuthProvider>(context, listen: false);
                   await authProvider.signOut();
                   break;
               }
             },
             itemBuilder: (BuildContext context) => const [
+              PopupMenuItem(
+                value: 'history',
+                child: ListTile(
+                  leading: Icon(Icons.history),
+                  title: Text('History'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
               PopupMenuItem(
                 value: 'profile',
                 child: ListTile(
@@ -447,6 +451,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
         ],
         bottom: TabBar(
           controller: _tabController,
+          indicatorColor: const Color(0xFF00E5FF),
+          labelColor: Colors.white,
           tabs: const [
             Tab(icon: Icon(Icons.shopping_cart), text: 'Purchase'),
             Tab(icon: Icon(Icons.phone), text: 'My Numbers'),
@@ -1934,11 +1940,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
       final updatedRental = await _daisyService.checkSms(rental.id);
       
       if (updatedRental.smsReceived != null && updatedRental.smsReceived!.isNotEmpty) {
-        // Update rental in Supabase
-        await _supabaseService.updateRental(rental.id, {
-          'sms_received': updatedRental.smsReceived,
-          'status': 'completed'
-        });
+        // Linger successful code in My Numbers for 60s (no extra DB writes here)
+        _lingerUntil[updatedRental.id] = DateTime.now().add(const Duration(seconds: 60));
         await _loadActiveRentals();
         
         if (mounted) {
@@ -1950,6 +1953,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
           );
         }
       } else {
+        // no code yet: do nothing special
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(

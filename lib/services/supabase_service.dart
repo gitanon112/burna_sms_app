@@ -206,6 +206,53 @@ class SupabaseService {
   }
 
   // Wallet helpers
+  /// Success-only debit: subtract from wallet and append ledger row atomically on server via RPC.
+  /// Falls back to direct update if RPC not available.
+  Future<void> debitWalletOnSuccess({
+    required String userId,
+    required int amountCents,
+    required String rentalId,
+    required String reason,
+  }) async {
+    // Try an RPC if you have one; otherwise perform two-step with DB constraints on server
+    try {
+      // Prefer RPC wallet_debit_success(user_id uuid, amount_cents int, reason text, rental_id uuid)
+      await client.rpc('wallet_debit_success', params: {
+        'p_user_id': userId,
+        'p_amount_cents': amountCents,
+        'p_reason': reason,
+        'p_rental_id': rentalId,
+      });
+      return;
+    } catch (_) {
+      // Fallback: transactional mimic – update profiles then insert ledger.
+      // Note: In absence of server transaction, this can race. Recommended to add RPC later.
+      final profile = await client
+          .from('profiles')
+          .select('wallet_balance_cents')
+          .eq('id', userId)
+          .maybeSingle();
+      final current = (profile?['wallet_balance_cents'] as num?)?.toInt() ?? 0;
+      final next = current - amountCents;
+      if (next < 0) {
+        // Do not allow negative here; but since billing is success-only, proceed with floor at 0
+      }
+      await client
+          .from('profiles')
+          .update({'wallet_balance_cents': next < 0 ? 0 : next})
+          .eq('id', userId);
+      await client.from('wallet_ledger').insert({
+        'user_id': userId,
+        'type': 'DEBIT',
+        'status': 'COMMITTED',
+        'amount_cents': amountCents,
+        'balance_after_cents': next < 0 ? 0 : next,
+        'reason': reason,
+        'context': {'rental_id': rentalId, 'mode': 'success_only'},
+      });
+    }
+  }
+  
   Future<int> getWalletBalanceCents() async {
     try {
       if (!isAuthenticated) return 0;

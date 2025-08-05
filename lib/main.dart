@@ -12,9 +12,7 @@ void main() async {
   // Initialize Supabase
   await SupabaseService.initialize();
 
-  // Initialize Stripe
-  await BillingService().initializeStripe();
-  
+  // Stripe PaymentSheet no longer used; external Stripe Checkout is opened in Safari.
   runApp(const BurnaSMSApp());
 }
 

@@ -60,14 +60,14 @@ dependencies:
   fluttertoast: ^8.2.6
   
   # Intl for date formatting and localization
-  intl: ^0.19.0
+  intl: ^0.20.2
   
   # Shared preferences for simple local storage
   shared_preferences: ^2.2.3
   
   # UUID generation
   uuid: ^4.5.1
-  flutter_stripe: ^11.5.0
+  # flutter_stripe removed; using external Stripe Checkout via url_launcher
 
 dev_dependencies:
   flutter_test:
@@ -78,7 +78,7 @@ dev_dependencies:
   # activated in the `analysis_options.yaml` file located at the root of your
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
-  flutter_lints: ^5.0.0
+  flutter_lints: ^6.0.0
   
   # JSON serialization code generation
   json_serializable: ^6.8.0

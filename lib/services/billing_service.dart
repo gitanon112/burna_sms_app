@@ -1,62 +1,41 @@
-import 'package:flutter_stripe/flutter_stripe.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import '../constants/app_constants.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class BillingService {
   static final BillingService _instance = BillingService._internal();
   factory BillingService() => _instance;
   BillingService._internal();
 
-  Future<void> initializeStripe() async {
-    Stripe.publishableKey = AppConstants.stripePublishableKey;
-    await Stripe.instance.applySettings();
-  }
+  /// Open external Stripe Checkout via Supabase Edge Function (create_checkout_session).
+  /// amountCents must be positive. Returns true if the checkout page was opened.
+  Future<bool> openExternalCheckout({required int amountCents}) async {
+    if (amountCents <= 0) {
+      throw ArgumentError('amountCents must be > 0');
+    }
 
-  /// Calls Supabase Edge Function to create a PaymentIntent; returns client_secret.
-  Future<String> createPaymentIntentClientSecret(int amountCents) async {
     final res = await Supabase.instance.client.functions.invoke(
-      'create_payment_intent',
+      'create_checkout_session',
       body: {'amount_cents': amountCents},
     );
-    final data = res.data as Map<String, dynamic>;
-    final clientSecret = data['client_secret'] as String?;
-    if (clientSecret == null) {
-      throw Exception('No client_secret returned from create_payment_intent');
+    final data = res.data as Map<String, dynamic>?;
+
+    final url = data?['url'] as String?;
+    if (url == null || url.isEmpty) {
+      throw Exception('No Checkout URL returned from create_checkout_session');
     }
-    return clientSecret;
-  }
 
-  /// Full top-up flow: create PI, init sheet, present.
-  /// Returns true if user completed payment; false if cancelled.
-  Future<bool> topUpWalletCents(int amountCents) async {
-    try {
-      final clientSecret = await createPaymentIntentClientSecret(amountCents);
+    final uri = Uri.parse(url);
 
-      // flutter_stripe 11.x expects the client secret in SetupPaymentSheetParameters
-      await Stripe.instance.initPaymentSheet(
-        paymentSheetParameters: SetupPaymentSheetParameters(
-          paymentIntentClientSecret: clientSecret,
-          merchantDisplayName: AppConstants.appName,
-          allowsDelayedPaymentMethods: false,
-        ),
-      );
-
-      await Stripe.instance.presentPaymentSheet();
-
-      // If we reach here, user completed the sheet (not necessarily succeeded on Stripe side yet).
-      // Confirm (no-op for PaymentSheet 11.x) and return success; webhook will credit wallet.
-      return true;
-    } on StripeException catch (e) {
-      // Suppress visible error when user cancels the sheet.
-      // FailureCode.canceled means user closed or canceled the payment sheet.
-      final code = e.error.code;
-      if (code == FailureCode.Canceled) {
-        return false;
-      }
-      // For other Stripe errors, rethrow to let UI show a concise message.
-      rethrow;
-    } catch (_) {
-      rethrow;
+    // iOS compliance: open in Safari, not an in-app webview.
+    final can = await canLaunchUrl(uri);
+    if (!can) {
+      throw Exception('Cannot open Checkout URL');
     }
+    // Prefer external application
+    final opened = await launchUrl(
+      uri,
+      mode: LaunchMode.externalApplication,
+    );
+    return opened;
   }
 }

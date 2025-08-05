@@ -210,6 +210,8 @@ class BurnaService {
   }
 
   /// Check for SMS on a rental
+  /// On first successful code, mark completed AND debit wallet by rentals.burna_price (success-only billing).
+  /// Timeout/cancel paths elsewhere must not debit.
   Future<Rental> checkSms(String rentalId) async {
     _ensureDaisyClient();
     
@@ -228,8 +230,8 @@ class BurnaService {
       // Check SMS from DaisySMS
       final smsContent = await _daisyClient!.getSms(rental.daisyRentalId);
       
-      if (smsContent != null && rental.smsReceived == null) {
-        // Update rental with SMS
+      if (smsContent != null && (rental.smsReceived == null || rental.smsReceived!.isEmpty)) {
+        // 1) Update rental with SMS and completed status
         final updatedRental = await _supabaseService.updateRental(
           rentalId,
           {
@@ -237,6 +239,19 @@ class BurnaService {
             'status': 'completed',
           },
         );
+        // 2) Success-only wallet debit using the stored burna_price (in dollars) -> convert to cents
+        try {
+          final amountCents = (updatedRental.burnaPrice * 100).round();
+          await _supabaseService.debitWalletOnSuccess(
+            userId: currentUser.id,
+            amountCents: amountCents,
+            rentalId: rentalId,
+            reason: 'SMS code received for ${updatedRental.serviceName} (${updatedRental.countryName})',
+          );
+        } catch (e) {
+          // Non-fatal for UI: log and continue; balance can be reconciled later if needed.
+          print('BurnaService: wallet debit failed for rental $rentalId: $e');
+        }
         return updatedRental;
       }
       
