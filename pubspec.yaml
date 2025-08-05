@@ -39,7 +39,7 @@ dependencies:
   supabase_flutter: ^2.9.0
   
   # HTTP requests for DaisySMS proxy service
-  http: ^1.2.0
+  http: ^1.4.0
   
   # State management
   provider: ^6.1.2
@@ -67,6 +67,7 @@ dependencies:
   
   # UUID generation
   uuid: ^4.5.1
+  flutter_stripe: ^11.5.0
 
 dev_dependencies:
   flutter_test:

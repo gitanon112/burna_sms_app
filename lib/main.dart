@@ -4,12 +4,16 @@ import 'constants/app_constants.dart';
 import 'services/supabase_service.dart';
 import 'services/auth_provider.dart';
 import 'screens/auth_wrapper.dart';
+import 'services/billing_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
   // Initialize Supabase
   await SupabaseService.initialize();
+
+  // Initialize Stripe
+  await BillingService().initializeStripe();
   
   runApp(const BurnaSMSApp());
 }

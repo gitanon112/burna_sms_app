@@ -17,6 +17,13 @@ class User {
   @JsonKey(name: 'stripe_customer_id')
   final String? stripeCustomerId;
 
+  // New wallet field from DB
+  @JsonKey(name: 'wallet_balance_cents')
+  final int walletBalanceCents;
+
+  // Convenience getter for UI
+  double get walletBalanceDollars => walletBalanceCents / 100.0;
+
   User({
     required this.id,
     required this.email,
@@ -25,6 +32,7 @@ class User {
     this.totalSpent = 0.0,
     this.totalRentals = 0,
     this.stripeCustomerId,
+    this.walletBalanceCents = 0,
   });
 
   factory User.fromJson(Map<String, dynamic> json) => _$UserFromJson(json);
@@ -38,6 +46,7 @@ class User {
     double? totalSpent,
     int? totalRentals,
     String? stripeCustomerId,
+    int? walletBalanceCents,
   }) {
     return User(
       id: id ?? this.id,
@@ -47,6 +56,7 @@ class User {
       totalSpent: totalSpent ?? this.totalSpent,
       totalRentals: totalRentals ?? this.totalRentals,
       stripeCustomerId: stripeCustomerId ?? this.stripeCustomerId,
+      walletBalanceCents: walletBalanceCents ?? this.walletBalanceCents,
     );
   }
 }

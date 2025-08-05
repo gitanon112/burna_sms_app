@@ -50,7 +50,7 @@ class SupabaseService {
 
     final response = await client
         .from('profiles')
-        .select()
+        .select('id,email,created_at,updated_at,total_spent,total_rentals,stripe_customer_id,wallet_balance_cents')
         .eq('id', currentUser!.id)
         .maybeSingle();
     
@@ -67,12 +67,13 @@ class SupabaseService {
       'updated_at': DateTime.now().toIso8601String(),
       'total_spent': 0.0,
       'total_rentals': 0,
+      'wallet_balance_cents': 0,
     };
 
     final response = await client
         .from('profiles')
         .insert(userProfile)
-        .select()
+        .select('id,email,created_at,updated_at,total_spent,total_rentals,stripe_customer_id,wallet_balance_cents')
         .single();
 
     return app_user.User.fromJson(response);
@@ -83,7 +84,7 @@ class SupabaseService {
         .from('profiles')
         .update(user.toJson())
         .eq('id', user.id)
-        .select()
+        .select('id,email,created_at,updated_at,total_spent,total_rentals,stripe_customer_id,wallet_balance_cents')
         .single();
 
     return app_user.User.fromJson(response);
@@ -178,6 +179,12 @@ class SupabaseService {
           );
           return rentals.isEmpty ? null : Rental.fromJson(rentals.first);
         });
+  }
+
+  // Wallet helpers
+  Future<int> getWalletBalanceCents() async {
+    final profile = await getCurrentUserProfile();
+    return profile?.walletBalanceCents ?? 0;
   }
 
   // Database trigger for rental updates

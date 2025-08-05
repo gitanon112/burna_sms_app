@@ -10,6 +10,9 @@ class AppConstants {
   // Python Backend API Configuration (existing burna-sms backend)
   static const String daisyProxyBaseUrl = 'http://localhost:8000';
   
+  // Stripe (client-side)
+  static const String stripePublishableKey = 'pk_live_51QI4N5P6km4bxBZ7qVa8QE2QOWAisJ4bHROKNCW7lRlo0QpgGz5JAfnbgDICHMSkiC0KTIGOpiKZSt0dZAXV4nEi00zX7KqETc';
+
   // App Settings
   static const double markupMultiplier = 2.0;
   static const int smsCheckIntervalSeconds = 5;

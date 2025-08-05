@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../services/auth_provider.dart';
 import '../services/supabase_service.dart';
 import '../services/burna_service.dart';
+import '../services/billing_service.dart';
 import '../models/user.dart' as app_user;
 import '../models/rental.dart';
 import '../models/service_data.dart';
@@ -31,14 +32,28 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   String? _errorMessage;
   String _searchQuery = '';
 
+  int _walletBalanceCents = 0;
+
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
     _loadInitialData();
+    _refreshWallet();
     
     // Start expiry monitoring for rentals
     _daisyService.startExpiryMonitoring();
+  }
+
+  Future<void> _refreshWallet() async {
+    try {
+      final cents = await _supabaseService.getWalletBalanceCents();
+      if (mounted) {
+        setState(() {
+          _walletBalanceCents = cents;
+        });
+      }
+    } catch (_) {}
   }
 
   @override
@@ -222,11 +237,59 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text(AppConstants.appName),
+        title: Row(
+          children: [
+            const Text(AppConstants.appName),
+            const Spacer(),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text(
+                '\$${(_walletBalanceCents / 100).toStringAsFixed(2)}',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ],
+        ),
         backgroundColor: Theme.of(context).colorScheme.primary,
         foregroundColor: Colors.white,
         elevation: 0,
         actions: [
+          IconButton(
+            tooltip: 'Top up \$5',
+            icon: const Icon(Icons.account_balance_wallet_outlined),
+            onPressed: () async {
+              try {
+                await BillingService().topUpWalletCents(500);
+                await Future.delayed(const Duration(seconds: 2));
+                await _refreshWallet();
+                await _loadActiveRentals();
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Payment completed. Balance will update shortly.'),
+                      backgroundColor: Colors.green,
+                    ),
+                  );
+                }
+              } catch (e) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Payment failed: $e'),
+                      backgroundColor: Colors.red,
+                    ),
+                  );
+                }
+              }
+            },
+          ),
           PopupMenuButton<String>(
             onSelected: (value) async {
               switch (value) {
@@ -235,14 +298,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   break;
                 case 'refresh':
                   await _loadInitialData();
+                  await _refreshWallet();
                   break;
                 case 'logout':
                   await authProvider.signOut();
                   break;
               }
             },
-            itemBuilder: (BuildContext context) => [
-              const PopupMenuItem(
+            itemBuilder: (BuildContext context) => const [
+              PopupMenuItem(
                 value: 'profile',
                 child: ListTile(
                   leading: Icon(Icons.person),
@@ -250,7 +314,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   contentPadding: EdgeInsets.zero,
                 ),
               ),
-              const PopupMenuItem(
+              PopupMenuItem(
                 value: 'refresh',
                 child: ListTile(
                   leading: Icon(Icons.refresh),
@@ -258,7 +322,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   contentPadding: EdgeInsets.zero,
                 ),
               ),
-              const PopupMenuItem(
+              PopupMenuItem(
                 value: 'logout',
                 child: ListTile(
                   leading: Icon(Icons.logout),
