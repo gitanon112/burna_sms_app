@@ -27,18 +27,36 @@ class BillingService {
   }
 
   /// Full top-up flow: create PI, init sheet, present.
-  Future<void> topUpWalletCents(int amountCents) async {
-    final clientSecret = await createPaymentIntentClientSecret(amountCents);
+  /// Returns true if user completed payment; false if cancelled.
+  Future<bool> topUpWalletCents(int amountCents) async {
+    try {
+      final clientSecret = await createPaymentIntentClientSecret(amountCents);
 
-    // flutter_stripe 11.x expects the client secret in SetupPaymentSheetParameters
-    await Stripe.instance.initPaymentSheet(
-      paymentSheetParameters: SetupPaymentSheetParameters(
-        paymentIntentClientSecret: clientSecret,
-        merchantDisplayName: AppConstants.appName,
-        allowsDelayedPaymentMethods: false,
-      ),
-    );
+      // flutter_stripe 11.x expects the client secret in SetupPaymentSheetParameters
+      await Stripe.instance.initPaymentSheet(
+        paymentSheetParameters: SetupPaymentSheetParameters(
+          paymentIntentClientSecret: clientSecret,
+          merchantDisplayName: AppConstants.appName,
+          allowsDelayedPaymentMethods: false,
+        ),
+      );
 
-    await Stripe.instance.presentPaymentSheet();
+      await Stripe.instance.presentPaymentSheet();
+
+      // If we reach here, user completed the sheet (not necessarily succeeded on Stripe side yet).
+      // Confirm (no-op for PaymentSheet 11.x) and return success; webhook will credit wallet.
+      return true;
+    } on StripeException catch (e) {
+      // Suppress visible error when user cancels the sheet.
+      // FailureCode.canceled means user closed or canceled the payment sheet.
+      final code = e.error.code;
+      if (code == FailureCode.Canceled) {
+        return false;
+      }
+      // For other Stripe errors, rethrow to let UI show a concise message.
+      rethrow;
+    } catch (_) {
+      rethrow;
+    }
   }
 }

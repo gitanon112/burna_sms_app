@@ -2,6 +2,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../constants/app_constants.dart';
 import '../models/user.dart' as app_user;
 import '../models/rental.dart';
+import 'package:flutter/foundation.dart';
 
 class SupabaseService {
   static final SupabaseService _instance = SupabaseService._internal();
@@ -53,15 +54,26 @@ class SupabaseService {
   Future<app_user.User?> getCurrentUserProfile() async {
     if (!isAuthenticated) return null;
 
+    debugPrint('SupabaseService.getCurrentUserProfile: querying profiles for user_id=${currentUser!.id}');
     final response = await client
         .from('profiles')
         .select('id,email,created_at,updated_at,total_spent,total_rentals,stripe_customer_id,wallet_balance_cents')
         .eq('id', currentUser!.id)
         .maybeSingle();
     
-    if (response == null) return null;
+    if (response == null) {
+      debugPrint('SupabaseService.getCurrentUserProfile: no row found for user_id=${currentUser!.id}');
+      return null;
+    }
     
-    return app_user.User.fromJson(response);
+    try {
+      final u = app_user.User.fromJson(response);
+      debugPrint('SupabaseService.getCurrentUserProfile: wallet_balance_cents=${u.walletBalanceCents} for user_id=${u.id}');
+      return u;
+    } catch (e) {
+      debugPrint('SupabaseService.getCurrentUserProfile: mapping error: $e');
+      rethrow;
+    }
   }
 
   Future<app_user.User> createUserProfile(User authUser) async {
@@ -85,13 +97,20 @@ class SupabaseService {
   }
 
   Future<app_user.User> updateUserProfile(app_user.User user) async {
+    // Never push wallet_balance_cents from client; server/webhook controls it.
+    final payload = {
+      'email': user.email,
+      'updated_at': user.updatedAt.toIso8601String(),
+      'total_spent': user.totalSpent,
+      'total_rentals': user.totalRentals,
+      'stripe_customer_id': user.stripeCustomerId,
+    };
     final response = await client
         .from('profiles')
-        .update(user.toJson())
+        .update(payload)
         .eq('id', user.id)
         .select('id,email,created_at,updated_at,total_spent,total_rentals,stripe_customer_id,wallet_balance_cents')
         .single();
-
     return app_user.User.fromJson(response);
   }
 
@@ -189,12 +208,51 @@ class SupabaseService {
   // Wallet helpers
   Future<int> getWalletBalanceCents() async {
     try {
-      final profile = await getCurrentUserProfile();
-      return profile?.walletBalanceCents ?? 0;
-    } catch (_) {
-      // If the column is missing or any error occurs, treat as zero to avoid crashes.
+      if (!isAuthenticated) return 0;
+      // Always read directly from DB to avoid any mapping/stale issues
+      final raw = await client
+          .from('profiles')
+          .select('wallet_balance_cents')
+          .eq('id', currentUser!.id)
+          .maybeSingle();
+      final cents = (raw?['wallet_balance_cents'] as num?)?.toInt() ?? 0;
+      debugPrint('SupabaseService.getWalletBalanceCents: direct cents=$cents for user_id=${currentUser!.id}');
+      return cents;
+    } catch (e) {
+      debugPrint('getWalletBalanceCents error: $e');
       return 0;
     }
+  }
+  
+  // Stream of wallet changes for current user (server-pushed)
+  RealtimeChannel? _walletChannel;
+  void subscribeToWalletChanges(void Function(int cents) onChange) {
+    if (!isAuthenticated) return;
+    _walletChannel?.unsubscribe();
+    _walletChannel = client
+        .channel('public:profiles:wallet:${currentUser!.id}')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'profiles',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'id',
+            value: currentUser!.id,
+          ),
+          callback: (payload) {
+            final v = (payload.newRecord['wallet_balance_cents'] as num?)?.toInt();
+            if (v != null) onChange(v);
+          },
+        )
+        .subscribe();
+  }
+  
+  void unsubscribeWalletChanges() {
+    try {
+      _walletChannel?.unsubscribe();
+    } catch (_) {}
+    _walletChannel = null;
   }
 
   // Database trigger for rental updates
@@ -218,5 +276,24 @@ class SupabaseService {
           },
         )
         .subscribe();
+  }
+  
+  /// Hard wallet refresh that bypasses any in-memory state and forces a non-cached read.
+  Future<int> hardRefreshWalletBalanceCents() async {
+    if (!isAuthenticated) return 0;
+    final raw = await client
+        .from('profiles')
+        .select('wallet_balance_cents')
+        .eq('id', currentUser!.id)
+        .maybeSingle();
+    final cents = (raw?['wallet_balance_cents'] as num?)?.toInt() ?? 0;
+    debugPrint('SupabaseService.hardRefreshWalletBalanceCents: $cents');
+    return cents;
+  }
+  
+  String? debugCurrentUserId() {
+    final id = currentUser?.id;
+    debugPrint('SupabaseService.debugCurrentUserId: $id');
+    return id;
   }
 }

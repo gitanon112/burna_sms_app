@@ -9,6 +9,7 @@ import '../models/user.dart' as app_user;
 import '../models/rental.dart';
 import '../models/service_data.dart';
 import '../constants/app_constants.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -17,7 +18,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
+class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, WidgetsBindingObserver {
   late TabController _tabController;
   final SupabaseService _supabaseService = SupabaseService();
   final BurnaService _daisyService = BurnaService();
@@ -33,16 +34,61 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   String _searchQuery = '';
 
   int _walletBalanceCents = 0;
+  RealtimeChannel? _profileChannel;
+  
+  Future<void> _onResumed() async {
+    try {
+      final cents = await _supabaseService.hardRefreshWalletBalanceCents();
+      if (mounted) {
+        setState(() => _walletBalanceCents = cents);
+      }
+    } catch (_) {}
+    await _refreshWallet();
+  }
 
+  void _subscribeToProfileBalance() {
+    final userId = _supabaseService.currentUser?.id;
+    if (userId == null) return;
+    try {
+      _profileChannel = Supabase.instance.client
+        .channel('realtime:profiles_wallet_$userId')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'profiles',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'id',
+            value: userId,
+          ),
+          callback: (payload) {
+            final newRecord = payload.newRecord;
+            final cents = (newRecord['wallet_balance_cents'] as num?)?.toInt();
+            if (cents != null && mounted) {
+              setState(() {
+                _walletBalanceCents = cents;
+              });
+            }
+          },
+        )
+        .subscribe();
+    } catch (_) {
+      // Non-fatal; UI will still poll when needed.
+    }
+  }
+  
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _tabController = TabController(length: 3, vsync: this);
     _loadInitialData();
     _refreshWallet();
     
     // Start expiry monitoring for rentals
     _daisyService.startExpiryMonitoring();
+    
+    _subscribeToProfileBalance();
   }
 
   Future<void> _refreshWallet() async {
@@ -55,14 +101,27 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       }
     } catch (_) {}
   }
+  
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _onResumed();
+    }
+  }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _tabController.dispose();
     _searchController.dispose();
     
     // Stop expiry monitoring when the screen is disposed
     _daisyService.stopExpiryMonitoring();
+    
+    try {
+      _profileChannel?.unsubscribe();
+      _profileChannel = null;
+    } catch (_) {}
     
     super.dispose();
   }
@@ -266,27 +325,80 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             icon: const Icon(Icons.account_balance_wallet_outlined),
             onPressed: () async {
               try {
-                await BillingService().topUpWalletCents(500);
-                await Future.delayed(const Duration(seconds: 2));
-                await _refreshWallet();
-                await _loadActiveRentals();
-                if (mounted) {
+                final completed = await BillingService().topUpWalletCents(500);
+
+                if (!mounted) return;
+
+                if (!completed) {
+                  // User canceled the payment sheet; show subtle info and exit without red error.
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
-                      content: Text('Payment completed. Balance will update shortly.'),
+                      content: Text('Payment canceled'),
+                      backgroundColor: Colors.grey,
+                      duration: Duration(seconds: 2),
+                    ),
+                  );
+                  return;
+                }
+
+                // Payment sheet completed; webhook will credit the wallet asynchronously.
+                // Inform user and start polling the wallet balance briefly to reflect the change.
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Payment completed. Balance will update shortly.'),
+                    backgroundColor: Colors.green,
+                  ),
+                );
+
+                final startBalance = _walletBalanceCents;
+                // Immediate hard refresh to pick up webhook credit as soon as it lands
+                try {
+                  final fresh = await _supabaseService.hardRefreshWalletBalanceCents();
+                  if (mounted) {
+                    setState(() => _walletBalanceCents = fresh);
+                  }
+                } catch (_) {}
+                const totalWait = Duration(seconds: 30);
+                const step = Duration(seconds: 3);
+                var waited = Duration.zero;
+
+                while (waited < totalWait) {
+                  await Future.delayed(step);
+                  await _refreshWallet();
+                  if (_walletBalanceCents > startBalance) break;
+                  waited += step;
+                }
+
+                await _loadActiveRentals();
+
+                if (!mounted) return;
+
+                if (_walletBalanceCents > startBalance) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Balance updated.'),
                       backgroundColor: Colors.green,
+                      duration: Duration(seconds: 2),
+                    ),
+                  );
+                } else {
+                  // Webhook lagged; allow manual refresh
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text("Payment processed. Pull to refresh if balance hasn\u0027t updated yet."),
+                      backgroundColor: Colors.blueGrey,
+                      duration: Duration(seconds: 3),
                     ),
                   );
                 }
               } catch (e) {
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('Payment failed: $e'),
-                      backgroundColor: Colors.red,
-                    ),
-                  );
-                }
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Payment failed: $e'),
+                    backgroundColor: Colors.red,
+                  ),
+                );
               }
             },
           ),

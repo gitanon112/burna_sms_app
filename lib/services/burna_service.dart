@@ -117,8 +117,8 @@ class BurnaService {
     }
 
     // Enforce wallet balance before allowing purchase
-    final userProfile = await _supabaseService.getCurrentUserProfile();
-    final walletCents = userProfile?.walletBalanceCents ?? 0;
+    // IMPORTANT: always read the authoritative wallet directly from DB to avoid stale/mapped values
+    final walletCents = await _supabaseService.getWalletBalanceCents();
     if (walletCents <= 0) {
       throw Exception('Insufficient wallet balance. Please top up before purchasing a number.');
     }
