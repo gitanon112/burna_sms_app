@@ -10,6 +10,8 @@ import '../models/rental.dart';
 import '../models/service_data.dart';
 import '../constants/app_constants.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../widgets/compact_service_tile.dart';
+import 'dart:async';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -30,14 +32,177 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
   List<Rental> _historyRentals = [];
   // Linger map: rentalId -> DateTime when it should stop lingering (keep visible in My Numbers)
   final Map<String, DateTime> _lingerUntil = {};
+  // Remove old local profile channel field if present and replace with rentals + pollers
+  // Re-declare safely, guarding duplicates:
+  RealtimeChannel? _profileChannel; // keep if referenced elsewhere but we won't use it now
+
+  // Add (only once): rentals realtime and polling management
+  RealtimeChannel? _rentalsChannel;
+  final Map<String, Timer> _rentalPollers = {};
+  
+  // Missing state fields used throughout this file
+  int _walletBalanceCents = 0;
   bool _isLoading = false;
-  bool _showAllServices = false;
   String? _errorMessage;
   String _searchQuery = '';
-
-  int _walletBalanceCents = 0;
-  RealtimeChannel? _profileChannel;
+  bool _showAllServices = false;
   
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _tabController = TabController(length: 3, vsync: this);
+
+    _loadInitialData().then((_) {
+      // After initial load, align pollers with current active rentals
+      _syncRentalPollers();
+    });
+
+    _refreshWallet();
+
+    _daisyService.startExpiryMonitoring();
+
+    _subscribeToProfileBalance();
+    _subscribeToRentalsRealtime();
+  }
+
+  // Helper to refresh wallet pill value; used in initState and menu action
+  Future<void> _refreshWallet() async {
+    try {
+      final cents = await _supabaseService.getWalletBalanceCents();
+      if (!mounted) return;
+      setState(() {
+        _walletBalanceCents = cents;
+      });
+    } catch (e) {
+      // silent fail: UI still works with old value
+      debugPrint('refreshWallet error: $e');
+    }
+  }
+
+  // Add: rentals realtime subscription (only one definition)
+  void _subscribeToRentalsRealtime() {
+    final uid = _supabaseService.currentUser?.id;
+    if (uid == null) return;
+    try {
+      _rentalsChannel?.unsubscribe();
+      _rentalsChannel = Supabase.instance.client
+          .channel('public:rentals:$uid')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: 'rentals',
+            filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'user_id',
+              value: uid,
+            ),
+            callback: (payload) async {
+              await _loadActiveRentals();
+              _syncRentalPollers();
+            },
+          )
+          .subscribe();
+    } catch (_) {
+      // ignore
+    }
+  }
+
+  // Add: create/cleanup pollers for active rentals (use exponential backoff to reduce load)
+  void _syncRentalPollers() {
+    final activeIds = _activeRentals.map((r) => r.id).toSet();
+
+    // Stop pollers for rentals no longer active or present
+    for (final entry in _rentalPollers.entries.toList()) {
+      if (!activeIds.contains(entry.key)) {
+        entry.value.cancel();
+        _rentalPollers.remove(entry.key);
+      }
+    }
+
+    // Start pollers for active rentals that don't have one
+    for (final r in _activeRentals) {
+      if (_rentalPollers.containsKey(r.id)) continue;
+      if (r.status.toLowerCase() != 'active') continue;
+
+      // Exponential backoff sequence: 3s -> 5s -> 8s -> 12s -> 12s ...
+      final backoff = <Duration>[const Duration(seconds: 3), const Duration(seconds: 5), const Duration(seconds: 8), const Duration(seconds: 12)];
+      int idx = 0;
+
+      Future<void> tick() async {
+        try {
+          final updated = await _daisyService.checkSms(r.id);
+          if (updated.smsReceived != null && updated.smsReceived!.isNotEmpty) {
+            _lingerUntil[updated.id] = DateTime.now().toUtc().add(const Duration(seconds: 60));
+            await _loadActiveRentals();
+            // Stop polling once completed
+            final t = _rentalPollers.remove(updated.id);
+            t?.cancel();
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('SMS received: ${updated.smsReceived}'),
+                backgroundColor: Colors.green,
+              ),
+            );
+            return;
+          }
+          final nowUtc = DateTime.now().toUtc();
+          if (updated.expiresAt.toUtc().isBefore(nowUtc) || updated.status.toLowerCase() != 'active') {
+            final t = _rentalPollers.remove(updated.id);
+            t?.cancel();
+            await _loadActiveRentals();
+            return;
+          }
+        } catch (_) {
+          // ignore transient errors
+        } finally {
+          // schedule next with capped backoff
+          idx = (idx + 1).clamp(0, backoff.length - 1);
+          if (_rentalPollers.containsKey(r.id)) {
+            // re-schedule using a one-shot timer to vary interval
+            final next = Timer(backoff[idx], tick);
+            _rentalPollers[r.id] = next;
+          }
+        }
+      }
+
+      // seed first timer
+      _rentalPollers[r.id] = Timer(backoff[idx], tick);
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _tabController.dispose();
+    _searchController.dispose();
+
+    _daisyService.stopExpiryMonitoring();
+
+    try {
+      _rentalsChannel?.unsubscribe();
+      _rentalsChannel = null;
+    } catch (_) {}
+    for (final t in _rentalPollers.values) {
+      t.cancel();
+    }
+    _rentalPollers.clear();
+
+    super.dispose();
+  }
+
+  // Ensure _loadActiveRentals remains single definition and uses UTC in linger cleanup.
+  // Example patch around linger cleanup:
+  // _lingerUntil.removeWhere((_, until) => until.isBefore(DateTime.now()));
+  // becomes:
+  // _lingerUntil.removeWhere((_, until) => until.isBefore(DateTime.now().toUtc()));
+
+  // Ensure Check SMS button is not referenced anymore in active rentals rendering.
+  // Replace calls to _buildEnhancedRentalCard with _buildCompactRentalTile already added earlier.
+
+  // No changes needed to BillingService usage; just ensure import exists at top.
+  // Ensure WALLET pill is not referenced anymore in active rentals rendering.
   Future<void> _onResumed() async {
     try {
       final cents = await _supabaseService.hardRefreshWalletBalanceCents();
@@ -47,62 +212,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     } catch (_) {}
     await _refreshWallet();
   }
-
-  void _subscribeToProfileBalance() {
-    final userId = _supabaseService.currentUser?.id;
-    if (userId == null) return;
-    try {
-      _profileChannel = Supabase.instance.client
-        .channel('realtime:profiles_wallet_$userId')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.update,
-          schema: 'public',
-          table: 'profiles',
-          filter: PostgresChangeFilter(
-            type: PostgresChangeFilterType.eq,
-            column: 'id',
-            value: userId,
-          ),
-          callback: (payload) {
-            final newRecord = payload.newRecord;
-            final cents = (newRecord['wallet_balance_cents'] as num?)?.toInt();
-            if (cents != null && mounted) {
-              setState(() {
-                _walletBalanceCents = cents;
-              });
-            }
-          },
-        )
-        .subscribe();
-    } catch (_) {
-      // Non-fatal; UI will still poll when needed.
-    }
-  }
-  
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    _tabController = TabController(length: 3, vsync: this);
-    _loadInitialData();
-    _refreshWallet();
-    
-    // Start expiry monitoring for rentals
-    _daisyService.startExpiryMonitoring();
-    
-    _subscribeToProfileBalance();
-  }
-
-  Future<void> _refreshWallet() async {
-    try {
-      final cents = await _supabaseService.getWalletBalanceCents();
-      if (mounted) {
-        setState(() {
-          _walletBalanceCents = cents;
-        });
-      }
-    } catch (_) {}
-  }
   
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
@@ -111,22 +220,38 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     }
   }
 
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    _tabController.dispose();
-    _searchController.dispose();
-    
-    // Stop expiry monitoring when the screen is disposed
-    _daisyService.stopExpiryMonitoring();
-    
-    try {
-      _profileChannel?.unsubscribe();
-      _profileChannel = null;
-    } catch (_) {}
-    
-    super.dispose();
+
+  // Ensure _loveActiveRentals remains single definition and uses UTC in linger cleanup.
+  // Example patch around linger cleanup:
+  // _lingerUntil.removeWhere((_, until) => until.isBefore(DateTime.now()));
+  // becomes:
+  // _lingerUntil.removeWhere((_, until) => until.isBefore(DateTime.now().toUtc()));
+
+  // Ensure Check SMS button is not referenced anymore in active rentals rendering.
+  // Replace calls to _buildEnhancedRentalCard with _buildCompactRentalTile already added earlier.
+
+  // No changes needed to BillingService usage; just ensure import exists at top.
+
+
+  // Ensure _loadActiveRentals remains single definition and uses UTC in linger cleanup.
+  // Example patch around linger cleanup:
+  // _lingerUntil.removeWhere((_, until) => until.isBefore(DateTime.now()));
+  // becomes:
+  // _lingerUntil.removeWhere((_, until) => until.isBefore(DateTime.now().toUtc()));
+
+  // Ensure Check SMS button is not referenced anymore in active rentals rendering.
+  // Replace calls to _buildEnhancedRentalCard with _buildCompactRentalTile already added earlier.
+
+  // No changes needed to BillingService usage; just ensure import exists at top.
+  void _subscribeToProfileBalance() {
+    _supabaseService.subscribeToWalletChanges((cents) {
+      if (!mounted) return;
+      setState(() {
+        _walletBalanceCents = cents;
+      });
+    });
   }
+
 
   Future<void> _loadInitialData() async {
     setState(() {
@@ -216,11 +341,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
   Future<void> _loadActiveRentals() async {
     try {
       final rentals = await _supabaseService.getUserRentals();
-      print('HomeScreen: Loaded ${rentals.length} total rentals from Supabase');
-      
       final nowUtc = DateTime.now().toUtc();
-      // Clean up expired linger windows
-      _lingerUntil.removeWhere((_, until) => until.isBefore(DateTime.now()));
+
+      // Clean up expired linger windows using UTC
+      _lingerUntil.removeWhere((_, until) => until.isBefore(nowUtc));
+
       for (final rental in rentals) {
         final expiresUtc = rental.expiresAt.toUtc();
         final expiredFlag = expiresUtc.isBefore(nowUtc);
@@ -228,9 +353,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
         print('HomeScreen: Rental ${rental.id} - Status: ${rental.status}, Active: ${status == 'active'}, ExpiredByTime(UTC): $expiredFlag, ExpiresAt(UTC): $expiresUtc');
       }
 
-      // My Numbers: show
-      // - Active and not expired by time
-      // - Completed AND within linger window (show code for 60s)
       final active = rentals.where((r) {
         final status = r.status.toLowerCase();
         final expiresUtc = r.expiresAt.toUtc();
@@ -238,17 +360,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
         final isActive = status == 'active' && !expiredByTime;
         final isCompletedAndLingering = status == 'completed' &&
             _lingerUntil[r.id] != null &&
-            _lingerUntil[r.id]!.isAfter(DateTime.now());
+            _lingerUntil[r.id]!.isAfter(nowUtc);
         return isActive || isCompletedAndLingering;
       }).toList();
 
-      // History: only successful (completed) and NOT currently lingering.
-      // Cancelled or timeout (active but expired) must NOT appear in history per spec.
       final history = rentals.where((r) {
         final status = r.status.toLowerCase();
         final isCompleted = status == 'completed';
-        final isLingering = _lingerUntil[r.id] != null &&
-            _lingerUntil[r.id]!.isAfter(DateTime.now());
+        final isLingering = _lingerUntil[r.id] != null && _lingerUntil[r.id]!.isAfter(nowUtc);
         return isCompleted && !isLingering;
       }).toList();
 
@@ -600,7 +719,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
                       final service = items[index].$1;
                       final price = items[index].$2;
                       final icon = _getServiceIcon(service.name);
-                      return _CompactServiceTile(
+                      return CompactServiceTile(
                         name: service.name,
                         priceText: '\$${price.toStringAsFixed(2)}',
                         iconData: icon,
@@ -680,7 +799,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     final minPrice = service.availableCountries.isNotEmpty
         ? service.availableCountries.map((c) => c.burnaPrice).reduce((a, b) => a < b ? a : b)
         : 0.0;
-    return _CompactServiceTile(
+    return CompactServiceTile(
       name: service.name,
       priceText: '\$${minPrice.toStringAsFixed(2)}',
       iconData: _getServiceIcon(service.name),
@@ -690,7 +809,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
 
   Widget _buildActiveRentalsTab() {
     return RefreshIndicator(
-      onRefresh: _loadActiveRentals,
+      onRefresh: () async {
+        await _loadActiveRentals();
+        _syncRentalPollers();
+      },
       child: _activeRentals.isEmpty
           ? _buildEmptyState(
               icon: Icons.phone_disabled,
@@ -700,453 +822,113 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
               onAction: () => _tabController.animateTo(0),
             )
           : ListView.builder(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(12),
               itemCount: _activeRentals.length,
               itemBuilder: (context, index) {
                 final rental = _activeRentals[index];
-                return _buildEnhancedRentalCard(rental);
+                return _buildCompactRentalTile(rental);
               },
             ),
     );
   }
 
-  Widget _buildEnhancedRentalCard(Rental rental) {
-    // Use UTC now for consistency with DB-stored Z timestamps
+  Widget _buildCompactRentalTile(Rental rental) {
     final nowUtc = DateTime.now().toUtc();
     final expiresUtc = rental.expiresAt.toUtc();
     final isExpired = expiresUtc.isBefore(nowUtc);
-    final timeRemaining = expiresUtc.difference(nowUtc);
-    final statusColor = _getStatusColor(rental.status);
-    final hasReceivedSms = rental.smsReceived != null && rental.smsReceived!.isNotEmpty;
-    
+    final timeRemaining = isExpired ? Duration.zero : expiresUtc.difference(nowUtc);
+    final status = rental.status.toLowerCase();
+    final displayService = _expandedServiceName(rental.serviceName); // use full name
+
     return Container(
-      margin: const EdgeInsets.only(bottom: 16),
+      margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            Colors.white,
-            hasReceivedSms ? Colors.green.shade50 : Colors.grey.shade50,
-          ],
-        ),
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.08),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
+        color: const Color(0xFF0F172A),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0x1AFFFFFF)),
       ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(16),
-        child: Container(
-          decoration: BoxDecoration(
-            border: Border(
-              left: BorderSide(
-                color: statusColor,
-                width: 4,
-              ),
-            ),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Top row: Service name on left, right cluster with US chip, price, time-left
+            Row(
               children: [
-                // Header with status and timer
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: [
-                            statusColor.withOpacity(0.1),
-                            statusColor.withOpacity(0.2),
-                          ],
-                        ),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: statusColor.withOpacity(0.3)),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Container(
-                            width: 8,
-                            height: 8,
-                            decoration: BoxDecoration(
-                              color: statusColor,
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            rental.status.toUpperCase(),
-                            style: TextStyle(
-                              color: statusColor,
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const Spacer(),
-                    if (!isExpired)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: timeRemaining.inMinutes < 10
-                            ? Colors.red.shade100
-                            : Colors.orange.shade100,
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(
-                            color: timeRemaining.inMinutes < 10
-                              ? Colors.red.shade300
-                              : Colors.orange.shade300,
-                          ),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              Icons.timer,
-                              size: 14,
-                              color: timeRemaining.inMinutes < 10 ? Colors.red : Colors.orange,
-                            ),
-                            const SizedBox(width: 4),
-                            Text(
-                              '${timeRemaining.inMinutes}m left',
-                              style: TextStyle(
-                                color: timeRemaining.inMinutes < 10 ? Colors.red : Colors.orange,
-                                fontWeight: FontWeight.w600,
-                                fontSize: 12,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                  ],
-                ),
-                
-                const SizedBox(height: 20),
-                
-                // Phone Number Section
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [Colors.blue.shade50, Colors.blue.shade100],
-                    ),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.blue.shade200),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 48,
-                        height: 48,
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            colors: [Colors.blue.shade400, Colors.blue.shade600],
-                          ),
-                          borderRadius: BorderRadius.circular(24),
-                        ),
-                        child: const Icon(
-                          Icons.phone,
-                          color: Colors.white,
-                          size: 24,
-                        ),
-                      ),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Phone Number',
-                              style: TextStyle(
-                                color: Colors.blue.shade600,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              rental.phoneNumber,
-                              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                                fontWeight: FontWeight.bold,
-                                color: Colors.blue.shade800,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Container(
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(8),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.blue.withOpacity(0.2),
-                              blurRadius: 4,
-                              offset: const Offset(0, 2),
-                            ),
-                          ],
-                        ),
-                        child: IconButton(
-                          onPressed: () => _copyToClipboard(rental.phoneNumber),
-                          icon: Icon(Icons.copy, color: Colors.blue.shade600),
-                          tooltip: 'Copy number',
-                        ),
-                      ),
-                    ],
+                Expanded(
+                  child: Text(
+                    displayService,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16),
                   ),
                 ),
-                
-                const SizedBox(height: 16),
-                
-                // Service Info
-                Row(
-                  children: [
-                    Expanded(
-                      child: Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Colors.purple.shade50,
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: Colors.purple.shade200),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                Icon(
-                                  _getServiceIcon(rental.serviceName),
-                                  size: 16,
-                                  color: Colors.purple.shade600,
-                                ),
-                                const SizedBox(width: 4),
-                                Text(
-                                  'Service',
-                                  style: TextStyle(
-                                    color: Colors.purple.shade600,
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              rental.serviceName,
-                              style: TextStyle(
-                                color: Colors.purple.shade800,
-                                fontSize: 14,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Colors.orange.shade50,
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: Colors.orange.shade200),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                Icon(
-                                  Icons.location_on,
-                                  size: 16,
-                                  color: Colors.orange.shade600,
-                                ),
-                                const SizedBox(width: 4),
-                                Text(
-                                  'Country',
-                                  style: TextStyle(
-                                    color: Colors.orange.shade600,
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              rental.countryName,
-                              style: TextStyle(
-                                color: Colors.orange.shade800,
-                                fontSize: 14,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                
-                // SMS Received Section
-                if (hasReceivedSms) ...[
-                  const SizedBox(height: 16),
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [Colors.green.shade100, Colors.green.shade200],
-                      ),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.green.shade300),
-                    ),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 48,
-                          height: 48,
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: [Colors.green.shade400, Colors.green.shade600],
-                            ),
-                            borderRadius: BorderRadius.circular(24),
-                          ),
-                          child: const Icon(
-                            Icons.sms,
-                            color: Colors.white,
-                            size: 24,
-                          ),
-                        ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'SMS Received ✓',
-                                style: TextStyle(
-                                  color: Colors.green.shade600,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                rental.smsReceived!,
-                                style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.green.shade800,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Container(
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(8),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.green.withOpacity(0.2),
-                                blurRadius: 4,
-                                offset: const Offset(0, 2),
-                              ),
-                            ],
-                          ),
-                          child: IconButton(
-                            onPressed: () => _copyToClipboard(rental.smsReceived!),
-                            icon: Icon(Icons.copy, color: Colors.green.shade600),
-                            tooltip: 'Copy code',
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-                
-                const SizedBox(height: 20),
-                
-                // Action Buttons
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: rental.status == 'active'
-                          ? () => _checkSMS(rental)
-                          : null,
-                        style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          side: BorderSide(
-                            color: rental.status == 'active' ? Colors.blue.shade600 : Colors.grey,
-                          ),
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.refresh,
-                              size: 18,
-                              color: rental.status == 'active' ? Colors.blue.shade600 : Colors.grey,
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              'Check SMS',
-                              style: TextStyle(
-                                fontWeight: FontWeight.w600,
-                                color: rental.status == 'active' ? Colors.blue.shade600 : Colors.grey,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: ElevatedButton(
-                        onPressed: rental.status == 'active'
-                          ? () => _cancelRental(rental)
-                          : null,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: rental.status == 'active' ? Colors.red.shade600 : Colors.grey,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          elevation: rental.status == 'active' ? 4 : 0,
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(Icons.cancel, size: 18),
-                            const SizedBox(width: 8),
-                            Text(
-                              'Cancel',
-                              style: const TextStyle(fontWeight: FontWeight.w600),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
+                const SizedBox(width: 8),
+                _chip('🇺🇸  US'),
+                const SizedBox(width: 8),
+                _chip('\$${rental.burnaPrice.toStringAsFixed(2)}'),
+                const SizedBox(width: 8),
+                _chip(
+                  status == 'active'
+                      ? (isExpired ? 'expired' : '${timeRemaining.inMinutes}m left')
+                      : status,
+                  color: status == 'active'
+                      ? (timeRemaining.inMinutes < 10 ? const Color(0x33FF5252) : const Color(0x3338BDF8))
+                      : const Color(0x332196F3),
+                  borderColor: status == 'active'
+                      ? (timeRemaining.inMinutes < 10 ? const Color(0x66FF5252) : const Color(0x6638BDF8))
+                      : const Color(0x662196F3),
+                  icon: status == 'active' ? Icons.timer : Icons.check_circle,
+                  iconColor: status == 'active'
+                      ? (timeRemaining.inMinutes < 10 ? Colors.redAccent : const Color(0xFF38BDF8))
+                      : Colors.lightBlueAccent,
                 ),
               ],
             ),
-          ),
+            const SizedBox(height: 12),
+            // Number row + copy button aligned
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    rental.phoneNumber,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 20, letterSpacing: 0.4),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                _squareIconButton(
+                  icon: Icons.copy,
+                  tooltip: 'Copy number',
+                  onTap: () => _copyToClipboard(rental.phoneNumber),
+                ),
+              ],
+            ),
+            if (rental.smsReceived != null && rental.smsReceived!.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              _codeChip(rental.smsReceived!),
+            ],
+            const SizedBox(height: 12),
+            // Actions row
+            Row(
+              children: [
+                const Spacer(),
+                ElevatedButton.icon(
+                  onPressed: status == 'active' ? () => _cancelRental(rental) : null,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: status == 'active' ? Colors.red.shade600 : Colors.grey,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    elevation: status == 'active' ? 4 : 0,
+                  ),
+                  icon: const Icon(Icons.cancel, size: 18),
+                  label: const Text('Cancel', style: TextStyle(fontWeight: FontWeight.w600)),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     );
@@ -1311,11 +1093,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
 
   IconData _getServiceIcon(String serviceName) {
     final name = serviceName.toLowerCase();
-    
-    // Map service names to appropriate icons
+
     if (name.contains('whatsapp')) return Icons.chat;
     if (name.contains('telegram')) return Icons.send;
-    if (name.contains('discord')) return Icons.discord;
+    if (name.contains('discord')) return Icons.forum; // fixed
     if (name.contains('instagram')) return Icons.camera_alt;
     if (name.contains('facebook')) return Icons.facebook;
     if (name.contains('twitter') || name.contains('x.com')) return Icons.alternate_email;
@@ -1333,8 +1114,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     if (name.contains('github')) return Icons.code;
     if (name.contains('dropbox')) return Icons.cloud;
     if (name.contains('steam')) return Icons.games;
-    
-    // Default icons based on common patterns
+
     if (name.contains('bank') || name.contains('finance')) return Icons.account_balance;
     if (name.contains('shop') || name.contains('store')) return Icons.store;
     if (name.contains('food') || name.contains('delivery')) return Icons.restaurant;
@@ -1342,8 +1122,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     if (name.contains('hotel') || name.contains('travel')) return Icons.hotel;
     if (name.contains('game')) return Icons.sports_esports;
     if (name.contains('crypto') || name.contains('bitcoin')) return Icons.currency_bitcoin;
-    
-    // Fallback to service/communication icon
+
     return Icons.business;
   }
 
@@ -1525,97 +1304,89 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
       ),
     );
   }
-}
-// Compact dark tile widget with US badge
-class _CompactServiceTile extends StatelessWidget {
-  final String name;
-  final String priceText;
-  final IconData iconData;
-  final VoidCallback onTap;
-  const _CompactServiceTile({
-    super.key,
-    required this.name,
-    required this.priceText,
-    required this.iconData,
-    required this.onTap,
-  });
 
-  @override
-  Widget build(BuildContext context) {
+  // Expand known abbreviations to full service names for display
+  String _expandedServiceName(String input) {
+    final map = <String, String>{
+      'fb': 'Facebook',
+      'ig': 'Instagram',
+      'wa': 'WhatsApp',
+      'tg': 'Telegram',
+      'tw': 'Twitter',
+      'x': 'Twitter',
+      'yt': 'YouTube',
+      'gv': 'Google Voice',
+      'ms': 'Microsoft',
+      'gh': 'GitHub',
+    };
+    final lower = input.trim().toLowerCase();
+    return map[lower] ?? input;
+  }
+
+  // Small helper chips for right-side cluster
+  Widget _chip(String text, {Color? color, Color? borderColor, IconData? icon, Color? iconColor}) {
     return Container(
-      margin: const EdgeInsets.symmetric(vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: const Color(0xFF0F172A),
-        borderRadius: BorderRadius.circular(12),
+        color: color ?? const Color(0xFF111827),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: borderColor ?? const Color(0x1AFFFFFF)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (icon != null) ...[
+            Icon(icon, size: 14, color: iconColor ?? Colors.white70),
+            const SizedBox(width: 6),
+          ],
+          Text(
+            text,
+            style: const TextStyle(fontSize: 12, color: Colors.white70, fontWeight: FontWeight.w600),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _squareIconButton({required IconData icon, required String tooltip, required VoidCallback onTap}) {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF111827),
+        borderRadius: BorderRadius.circular(10),
         border: Border.all(color: const Color(0x1AFFFFFF)),
       ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(12),
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            child: Row(
-              children: [
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF111827),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Icon(iconData, color: Colors.white70, size: 22),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w600,
-                          fontSize: 15,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        priceText,
-                        style: const TextStyle(
-                          color: Colors.white60,
-                          fontSize: 12,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF111827),
-                    borderRadius: BorderRadius.circular(999),
-                    border: Border.all(color: const Color(0x1AFFFFFF)),
-                  ),
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text('🇺🇸', style: TextStyle(fontSize: 14)),
-                      SizedBox(width: 4),
-                      Text('US', style: TextStyle(fontSize: 12, color: Colors.white70)),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                const Icon(Icons.chevron_right, color: Colors.white54),
-              ],
-            ),
+      child: IconButton(
+        onPressed: onTap,
+        icon: Icon(icon, color: Colors.white70, size: 20),
+        tooltip: tooltip,
+      ),
+    );
+  }
+
+  Widget _codeChip(String code) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0x3328A745),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0x6628A745)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.sms, color: Color(0xFF28A745), size: 16),
+          const SizedBox(width: 8),
+          Text(
+            code,
+            style: const TextStyle(color: Color(0xFF28A745), fontWeight: FontWeight.w800, fontSize: 16, letterSpacing: 0.3),
           ),
-        ),
+          const SizedBox(width: 8),
+          _squareIconButton(
+            icon: Icons.copy,
+            tooltip: 'Copy code',
+            onTap: () => _copyToClipboard(code),
+          ),
+        ],
       ),
     );
   }
