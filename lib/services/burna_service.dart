@@ -105,7 +105,7 @@ class BurnaService {
   /// Purchase a phone number for SMS verification
   Future<Rental> purchaseNumber({
     required String serviceCode,
-    required String countryCode,
+    String countryCode = 'US',
   }) async {
     _ensureDaisyClient();
 
@@ -129,26 +129,30 @@ class BurnaService {
       // Get service pricing
       print('BurnaService: Getting available services...');
       final services = await getAvailableServices();
-      
-      if (!services.services.containsKey(serviceCode) ||
-          !services.services[serviceCode]!.countries.containsKey(countryCode)) {
-        throw Exception('Service or country not available');
+
+      if (!services.services.containsKey(serviceCode)) {
+        throw Exception('Service not available');
       }
-      
-      final countryInfo = services.services[serviceCode]!.countries[countryCode]!;
-      print('BurnaService: Found pricing - original: ${countryInfo.originalPrice}, burna: ${countryInfo.burnaPrice}');
-      
-      // Rent number from DaisySMS
+      // Daisy is US-only: choose the first available country entry just for pricing/TTL reference.
+      final svc = services.services[serviceCode]!;
+      final firstCountryEntry = svc.countries.entries.firstWhere(
+        (e) => e.value.available,
+        orElse: () => svc.countries.entries.first,
+      );
+      final pricingRef = firstCountryEntry.value;
+      final resolvedCountryCode = 'US';
+      final resolvedCountryName = 'United States';
+
+      print('BurnaService: Found pricing - original: ${pricingRef.originalPrice}, burna: ${pricingRef.burnaPrice}');
+
+      // Rent number from DaisySMS (no country parameter)
       print('BurnaService: Renting number from DaisySMS...');
-      // Set max_price as originalPrice * 1.1 to avoid surprises; 2 decimals
-      final maxPrice = (countryInfo.originalPrice * 1.1);
+      final maxPrice = (pricingRef.originalPrice * 1.1);
       final maxPriceStr = maxPrice.toStringAsFixed(2);
 
       final daisyRental = await _daisyClient!.rentNumber(
         serviceCode,
-        country: countryCode,
         maxPrice: maxPriceStr,
-        // Optional: support long-term via duration if we later expose via UI
         // duration: '1H',
       );
       
@@ -161,7 +165,7 @@ class BurnaService {
 
       // Align expiry to Daisy TTL if we have it; else default 15 minutes
       Duration expiryDuration;
-      final maybeTtl = countryInfo.ttlSeconds;
+      final maybeTtl = pricingRef.ttlSeconds;
       if (maybeTtl != null && maybeTtl > 0) {
         expiryDuration = Duration(seconds: maybeTtl);
       } else {
@@ -175,11 +179,11 @@ class BurnaService {
         'daisy_rental_id': daisyRental.id,
         'service_code': serviceCode,
         'service_name': serviceCode.toUpperCase(),
-        'country_code': countryCode,
-        'country_name': countryInfo.name,
+        'country_code': resolvedCountryCode,
+        'country_name': resolvedCountryName,
         'phone_number': daisyRental.number,
-        'original_price': countryInfo.originalPrice,
-        'burna_price': countryInfo.burnaPrice,
+        'original_price': pricingRef.originalPrice,
+        'burna_price': pricingRef.burnaPrice,
         'status': 'active',
         'created_at': now.toIso8601String(),
         'expires_at': expiresAt.toIso8601String(),
@@ -194,7 +198,7 @@ class BurnaService {
       final userProfile = await _supabaseService.getCurrentUserProfile();
       if (userProfile != null) {
         final updatedProfile = userProfile.copyWith(
-          totalSpent: userProfile.totalSpent + countryInfo.burnaPrice,
+          totalSpent: userProfile.totalSpent + pricingRef.burnaPrice,
           totalRentals: userProfile.totalRentals + 1,
           updatedAt: now,
         );

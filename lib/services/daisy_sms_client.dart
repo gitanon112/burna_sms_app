@@ -98,7 +98,6 @@ class DaisySMSClient {
   /// Supports max_price, duration (e.g., '12H','1D'), auto_renew ('0'/'1'), carriers, areas.
   Future<DaisyRental> rentNumber(
     String service, {
-    String country = '0',
     String? maxPrice,
     String? duration,
     String? autoRenew,
@@ -106,9 +105,9 @@ class DaisySMSClient {
     String? areas,
     String? number,
   }) async {
+    // DaisySMS is US-only; do NOT send any 'country' parameter.
     final params = <String, String>{
       'service': service,
-      'country': country,
     };
     if (maxPrice != null) params['max_price'] = maxPrice;
     if (duration != null) params['duration'] = duration;
@@ -126,11 +125,12 @@ class DaisySMSClient {
           id: parts[1],
           number: parts[2],
           service: service,
-          country: country,
+          country: 'US',
         );
       }
     }
-    
+
+    // Surface Daisy errors directly to aid debugging (e.g., NO_NUMBERS, NO_MONEY, MAX_PRICE_EXCEEDED)
     throw Exception('Failed to rent number: $response');
   }
 
@@ -215,7 +215,7 @@ class DaisyRental {
   final String id;
   final String number;
   final String service;
-  final String country;
+  final String country; // logical country label; Daisy is US-only
 
   const DaisyRental({
     required this.id,

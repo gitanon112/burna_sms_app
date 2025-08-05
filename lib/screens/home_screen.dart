@@ -512,6 +512,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
   }
 
   Widget _buildPurchaseTab() {
+    // Dark, compact, US-only presentation
     if (_availableServices.isEmpty) {
       return _buildEmptyState(
         icon: Icons.shopping_cart_outlined,
@@ -522,111 +523,93 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
       );
     }
 
+    // Derive a flat list for display: name, price (min), code
+    final items = _filteredServices.map((s) {
+      final price = s.availableCountries.isNotEmpty
+          ? s.availableCountries.map((c) => c.burnaPrice).reduce((a, b) => a < b ? a : b)
+          : 0.0;
+      return (s, price);
+    }).toList()
+      ..sort((a, b) => a.$1.name.toLowerCase().compareTo(b.$1.name.toLowerCase()));
+
     return RefreshIndicator(
       onRefresh: _loadInitialData,
       child: Column(
         children: [
-          // Search Bar
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.05),
-                  blurRadius: 4,
-                  offset: const Offset(0, 2),
+          // Minimal search on dark bg
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+            child: TextField(
+              controller: _searchController,
+              onChanged: _onSearchChanged,
+              style: const TextStyle(color: Colors.white),
+              decoration: InputDecoration(
+                hintText: 'Search services',
+                hintStyle: const TextStyle(color: Colors.white54),
+                prefixIcon: const Icon(Icons.search, color: Colors.white70),
+                suffixIcon: _searchQuery.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear, color: Colors.white70),
+                        onPressed: () {
+                          _searchController.clear();
+                          _onSearchChanged('');
+                        },
+                      )
+                    : null,
+                filled: true,
+                fillColor: const Color(0xFF111827),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: Color(0x1AFFFFFF)),
                 ),
-              ],
-            ),
-            child: Column(
-              children: [
-                // Search Input
-                TextField(
-                  controller: _searchController,
-                  onChanged: _onSearchChanged,
-                  decoration: InputDecoration(
-                    hintText: 'Search for services (Google, Facebook, etc.)',
-                    prefixIcon: Icon(Icons.search, color: Colors.blue.shade600),
-                    suffixIcon: _searchQuery.isNotEmpty
-                        ? IconButton(
-                            icon: Icon(Icons.clear, color: Colors.grey.shade600),
-                            onPressed: () {
-                              _searchController.clear();
-                              _onSearchChanged('');
-                            },
-                          )
-                        : null,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(color: Colors.blue.shade200),
-                    ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(color: Colors.grey.shade300),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(color: Colors.blue.shade600, width: 2),
-                    ),
-                    filled: true,
-                    fillColor: Colors.grey.shade50,
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                  ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: Color(0x33FFFFFF), width: 1.5),
                 ),
-                
-                const SizedBox(height: 12),
-                
-                // Show All / Popular Toggle
-                if (_searchQuery.isEmpty)
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        _showAllServices
-                            ? 'Showing all ${_filteredServices.length} services'
-                            : 'Showing popular services (${_filteredServices.length})',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Colors.grey.shade600,
-                        ),
-                      ),
-                      TextButton(
-                        onPressed: _toggleShowAll,
-                        child: Text(
-                          _showAllServices ? 'Show Popular Only' : 'Show All Services',
-                          style: TextStyle(
-                            color: Colors.blue.shade600,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                
-                if (_searchQuery.isNotEmpty)
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      'Found ${_filteredServices.length} services',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Colors.grey.shade600,
-                      ),
-                    ),
-                  ),
-              ],
+              ),
             ),
           ),
-          
-          // Services List
+          if (_searchQuery.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                children: [
+                  Text(
+                    _showAllServices ? 'All services' : 'Popular services',
+                    style: const TextStyle(color: Colors.white60, fontSize: 12),
+                  ),
+                  const Spacer(),
+                  TextButton(
+                    onPressed: _toggleShowAll,
+                    child: Text(
+                      _showAllServices ? 'Show Popular' : 'Show All',
+                      style: const TextStyle(color: Colors.white70),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           Expanded(
-            child: _filteredServices.isEmpty
+            child: items.isEmpty
                 ? _buildEmptySearchState()
                 : ListView.builder(
-                    padding: const EdgeInsets.all(16),
-                    itemCount: _filteredServices.length,
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    itemCount: items.length,
                     itemBuilder: (context, index) {
-                      final service = _filteredServices[index];
-                      return _buildEnhancedServiceCard(service);
+                      final service = items[index].$1;
+                      final price = items[index].$2;
+                      final icon = _getServiceIcon(service.name);
+                      return _CompactServiceTile(
+                        name: service.name,
+                        priceText: '\$${price.toStringAsFixed(2)}',
+                        iconData: icon,
+                        onTap: () {
+                          // US-only offering: bypass country sheet entirely. If US not present, show a toast.
+                          // DaisySMS is US-only. Call purchase with service code only; second arg kept for signature but ignored downstream.
+                          _purchaseNumber(service.serviceCode, 'US');
+                        },
+                      );
                     },
                   ),
           ),
@@ -692,321 +675,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     );
   }
 
+  // Old complex card replaced by compact dark tile list
   Widget _buildEnhancedServiceCard(ServiceData service) {
-    final isAvailable = service.totalAvailableCount > 0;
     final minPrice = service.availableCountries.isNotEmpty
         ? service.availableCountries.map((c) => c.burnaPrice).reduce((a, b) => a < b ? a : b)
         : 0.0;
-    
-    return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            Colors.white,
-            Colors.grey.shade50,
-          ],
-        ),
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.08),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(16),
-        child: Container(
-          decoration: BoxDecoration(
-            border: Border(
-              left: BorderSide(
-                color: isAvailable ? Colors.green : Colors.grey,
-                width: 4,
-              ),
-            ),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Header
-                Row(
-                  children: [
-                    Container(
-                      width: 56,
-                      height: 56,
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: isAvailable
-                            ? [Colors.blue.shade400, Colors.blue.shade600]
-                            : [Colors.grey.shade300, Colors.grey.shade400],
-                        ),
-                        borderRadius: BorderRadius.circular(12),
-                        boxShadow: [
-                          BoxShadow(
-                            color: (isAvailable ? Colors.blue : Colors.grey).withOpacity(0.3),
-                            blurRadius: 8,
-                            offset: const Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                      child: Icon(
-                        _getServiceIcon(service.name),
-                        color: Colors.white,
-                        size: 28,
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  service.name,
-                                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.grey.shade800,
-                                  ),
-                                ),
-                              ),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                decoration: BoxDecoration(
-                                  color: isAvailable ? Colors.green.shade100 : Colors.grey.shade200,
-                                  borderRadius: BorderRadius.circular(20),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(
-                                      isAvailable ? Icons.check_circle : Icons.pause_circle,
-                                      size: 16,
-                                      color: isAvailable ? Colors.green.shade700 : Colors.grey.shade600,
-                                    ),
-                                    const SizedBox(width: 4),
-                                    Text(
-                                      isAvailable ? 'Available' : 'Unavailable',
-                                      style: TextStyle(
-                                        color: isAvailable ? Colors.green.shade700 : Colors.grey.shade600,
-                                        fontWeight: FontWeight.w600,
-                                        fontSize: 12,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            '${service.availableCountries.length} countries • ${service.totalAvailableCount} numbers',
-                            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                              color: Colors.grey.shade600,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                
-                const SizedBox(height: 20),
-                
-                // Price and Stats Row
-                Row(
-                  children: [
-                    Expanded(
-                      child: Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Colors.blue.shade50,
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: Colors.blue.shade200),
-                        ),
-                        child: Column(
-                          children: [
-                            Text(
-                              'From',
-                              style: TextStyle(
-                                color: Colors.blue.shade600,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                            Text(
-                              '\$${minPrice.toStringAsFixed(2)}',
-                              style: TextStyle(
-                                color: Colors.blue.shade800,
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Colors.purple.shade50,
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: Colors.purple.shade200),
-                        ),
-                        child: Column(
-                          children: [
-                            Text(
-                              'Service ID',
-                              style: TextStyle(
-                                color: Colors.purple.shade600,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                            Text(
-                              service.serviceCode,
-                              style: TextStyle(
-                                color: Colors.purple.shade800,
-                                fontSize: 14,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                
-                const SizedBox(height: 16),
-                
-                // Country Preview
-                if (service.availableCountries.isNotEmpty) ...[
-                  Text(
-                    'Popular Countries',
-                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.w600,
-                      color: Colors.grey.shade700,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
-                      children: service.availableCountries.take(4).map((country) {
-                        return Container(
-                          margin: const EdgeInsets.only(right: 8),
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: [Colors.orange.shade100, Colors.orange.shade200],
-                            ),
-                            borderRadius: BorderRadius.circular(20),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.orange.withOpacity(0.2),
-                                blurRadius: 4,
-                                offset: const Offset(0, 2),
-                              ),
-                            ],
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                Icons.location_on,
-                                size: 14,
-                                color: Colors.orange.shade700,
-                              ),
-                              const SizedBox(width: 4),
-                              Text(
-                                country.name,
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                  color: Colors.orange.shade800,
-                                ),
-                              ),
-                              const SizedBox(width: 4),
-                              Text(
-                                '\$${country.burnaPrice.toStringAsFixed(2)}',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  color: Colors.orange.shade600,
-                                ),
-                              ),
-                            ],
-                          ),
-                        );
-                      }).toList(),
-                    ),
-                  ),
-                  if (service.availableCountries.length > 4)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 8),
-                      child: Text(
-                        '+${service.availableCountries.length - 4} more countries available',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Colors.grey.shade500,
-                          fontStyle: FontStyle.italic,
-                        ),
-                      ),
-                    ),
-                ],
-                
-                const SizedBox(height: 20),
-                
-                // Action Button
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: isAvailable
-                      ? () => _showCountrySelection(service)
-                      : null,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: isAvailable ? Colors.blue.shade600 : Colors.grey.shade400,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      elevation: isAvailable ? 4 : 0,
-                      shadowColor: isAvailable ? Colors.blue.shade300 : null,
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          isAvailable ? Icons.shopping_cart : Icons.block,
-                          size: 20,
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          isAvailable ? 'Select Country & Purchase' : 'Currently Unavailable',
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w600,
-                            fontSize: 16,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
+    return _CompactServiceTile(
+      name: service.name,
+      priceText: '\$${minPrice.toStringAsFixed(2)}',
+      iconData: _getServiceIcon(service.name),
+      onTap: () => _showCountrySelection(service),
     );
   }
 
@@ -1669,238 +1347,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     return Icons.business;
   }
 
+  // Country selection removed for US-only app. Kept for backward compatibility; not shown.
   void _showCountrySelection(ServiceData service) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => Container(
-        height: MediaQuery.of(context).size.height * 0.8,
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.only(
-            topLeft: Radius.circular(20),
-            topRight: Radius.circular(20),
-          ),
-        ),
-        child: Column(
-          children: [
-            // Handle bar
-            Container(
-              margin: const EdgeInsets.only(top: 12),
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Colors.grey.shade300,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            
-            // Header
-            Padding(
-              padding: const EdgeInsets.all(20),
-              child: Row(
-                children: [
-                  Container(
-                    width: 48,
-                    height: 48,
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [Colors.blue.shade400, Colors.blue.shade600],
-                      ),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Icon(
-                      _getServiceIcon(service.name),
-                      color: Colors.white,
-                      size: 24,
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Select Country',
-                          style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                            fontWeight: FontWeight.bold,
-                            color: Colors.grey.shade800,
-                          ),
-                        ),
-                        Text(
-                          'For ${service.name}',
-                          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                            color: Colors.grey.shade600,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  IconButton(
-                    onPressed: () => Navigator.pop(context),
-                    icon: Icon(Icons.close, color: Colors.grey.shade600),
-                  ),
-                ],
-              ),
-            ),
-            
-            // Countries List
-            Expanded(
-              child: ListView.builder(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                itemCount: service.availableCountries.length,
-                itemBuilder: (context, index) {
-                  final country = service.availableCountries[index];
-                  final isAvailable = country.available && country.count > 0;
-                  
-                  return Container(
-                    margin: const EdgeInsets.only(bottom: 12),
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.centerLeft,
-                        end: Alignment.centerRight,
-                        colors: [
-                          Colors.white,
-                          isAvailable ? Colors.blue.shade50 : Colors.grey.shade50,
-                        ],
-                      ),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: isAvailable ? Colors.blue.shade200 : Colors.grey.shade200,
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.05),
-                          blurRadius: 4,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(12),
-                        onTap: isAvailable
-                          ? () {
-                              Navigator.pop(context);
-                              _purchaseNumber(service.serviceCode, service.countries.keys.firstWhere(
-                                (key) => service.countries[key] == country,
-                              ));
-                            }
-                          : null,
-                        child: Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Row(
-                            children: [
-                              // Country Flag/Icon
-                              Container(
-                                width: 48,
-                                height: 48,
-                                decoration: BoxDecoration(
-                                  gradient: LinearGradient(
-                                    colors: isAvailable
-                                      ? [Colors.orange.shade400, Colors.orange.shade600]
-                                      : [Colors.grey.shade300, Colors.grey.shade400],
-                                  ),
-                                  borderRadius: BorderRadius.circular(24),
-                                ),
-                                child: Icon(
-                                  Icons.location_on,
-                                  color: Colors.white,
-                                  size: 24,
-                                ),
-                              ),
-                              
-                              const SizedBox(width: 16),
-                              
-                              // Country Info
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      country.name,
-                                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                        fontWeight: FontWeight.bold,
-                                        color: isAvailable ? Colors.grey.shade800 : Colors.grey.shade500,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Row(
-                                      children: [
-                                        Icon(
-                                          Icons.phone_android,
-                                          size: 16,
-                                          color: isAvailable ? Colors.blue.shade600 : Colors.grey.shade400,
-                                        ),
-                                        const SizedBox(width: 4),
-                                        Text(
-                                          '${country.count} numbers available',
-                                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                            color: isAvailable ? Colors.grey.shade600 : Colors.grey.shade400,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              
-                              // Pricing
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.end,
-                                children: [
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                    decoration: BoxDecoration(
-                                      color: isAvailable ? Colors.green.shade100 : Colors.grey.shade200,
-                                      borderRadius: BorderRadius.circular(20),
-                                    ),
-                                    child: Text(
-                                      '\$${country.burnaPrice.toStringAsFixed(2)}',
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 16,
-                                        color: isAvailable ? Colors.green.shade700 : Colors.grey.shade500,
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    'Cost: \$${country.originalPrice.toStringAsFixed(2)}',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: Colors.grey.shade500,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              
-                              const SizedBox(width: 8),
-                              
-                              // Arrow Icon
-                              Icon(
-                                Icons.arrow_forward_ios,
-                                size: 16,
-                                color: isAvailable ? Colors.blue.shade400 : Colors.grey.shade300,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ),
-            
-            // Bottom padding
-            const SizedBox(height: 20),
-          ],
-        ),
-      ),
-    );
+    // No-op: always rent with US upstream.
   }
 
   Future<void> _purchaseNumber(String serviceCode, String countryCode) async {
@@ -2073,6 +1522,100 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
             child: const Text('Close'),
           ),
         ],
+      ),
+    );
+  }
+}
+// Compact dark tile widget with US badge
+class _CompactServiceTile extends StatelessWidget {
+  final String name;
+  final String priceText;
+  final IconData iconData;
+  final VoidCallback onTap;
+  const _CompactServiceTile({
+    super.key,
+    required this.name,
+    required this.priceText,
+    required this.iconData,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F172A),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0x1AFFFFFF)),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: Row(
+              children: [
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF111827),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(iconData, color: Colors.white70, size: 22),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 15,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        priceText,
+                        style: const TextStyle(
+                          color: Colors.white60,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF111827),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(color: const Color(0x1AFFFFFF)),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text('🇺🇸', style: TextStyle(fontSize: 14)),
+                      SizedBox(width: 4),
+                      Text('US', style: TextStyle(fontSize: 12, color: Colors.white70)),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                const Icon(Icons.chevron_right, color: Colors.white54),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
