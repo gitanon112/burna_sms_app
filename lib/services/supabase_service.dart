@@ -28,12 +28,17 @@ class SupabaseService {
   // Authentication methods
   Future<bool> signInWithGoogle() async {
     try {
-      final result = await client.auth.signInWithOAuth(
+      await client.auth.signInWithOAuth(
         OAuthProvider.google,
         redirectTo: AppConstants.googleOAuthRedirectUrl,
         authScreenLaunchMode: LaunchMode.externalApplication,
+        queryParams: {
+          // Force Google account chooser even if Safari has an active session
+          'prompt': 'select_account',
+        },
       );
-      return result; 
+      // Auth flow completes via onAuthStateChange; if no exception, consider initiated.
+      return true;
     } catch (e) {
       print('Google OAuth error: $e');
       return false;
@@ -183,8 +188,13 @@ class SupabaseService {
 
   // Wallet helpers
   Future<int> getWalletBalanceCents() async {
-    final profile = await getCurrentUserProfile();
-    return profile?.walletBalanceCents ?? 0;
+    try {
+      final profile = await getCurrentUserProfile();
+      return profile?.walletBalanceCents ?? 0;
+    } catch (_) {
+      // If the column is missing or any error occurs, treat as zero to avoid crashes.
+      return 0;
+    }
   }
 
   // Database trigger for rental updates

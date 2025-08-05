@@ -2,26 +2,33 @@ class AppConstants {
   // App Configuration
   static const String appName = 'Burna SMS';
   static const String appVersion = '1.0.0';
-  
-  // Supabase Configuration (UPDATE THESE WITH YOUR ACTUAL VALUES)
+
+  // Runtime mode flags
+  // Set isSandbox = true to use Stripe test keys and webhook secret; false for live
+  static const bool isSandbox = true;
+
+  // Supabase Configuration (unchanged)
   static const String supabaseUrl = 'https://gbnfwvqlrztzkbbntyqa.supabase.co';
   static const String supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdibmZ3dnFscnp0emtiYm50eXFhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM5MjQ5MzAsImV4cCI6MjA2OTUwMDkzMH0.yHz1zlwKg9jlARe_rP2U53Nvpj9KRGQp2z0F4kD-sMU';
-  
+
   // Python Backend API Configuration (existing burna-sms backend)
   static const String daisyProxyBaseUrl = 'http://localhost:8000';
-  
+
   // Stripe (client-side)
-  static const String stripePublishableKey = 'pk_live_51QI4N5P6km4bxBZ7qVa8QE2QOWAisJ4bHROKNCW7lRlo0QpgGz5JAfnbgDICHMSkiC0KTIGOpiKZSt0dZAXV4nEi00zX7KqETc';
+  // Provide both test and live keys and choose based on isSandbox
+  static const String stripePublishableKeyLive = 'pk_live_51Q478YGfECbKKsYtNmGsk1VKVSJTPswBAtbBsOitCSNnnE1CgVCySsSg9DMFnTNgAwA1L8zDhVV9zQK7ZJR9G5HV00kSKVmgBr';
+  static const String stripePublishableKeyTest = 'pk_test_51RsdXEGtJ2lATOELu8bSwZD3crdGZa0mowV6TY8rEaTi4axqPT2lhjHB08oxZI50uDKzkEUTZMnSz1JnGHM7UTOO006EmHI0qL';
+  static String get stripePublishableKey => isSandbox ? stripePublishableKeyTest : stripePublishableKeyLive;
 
   // App Settings
   static const double markupMultiplier = 2.0;
   static const int smsCheckIntervalSeconds = 5;
   static const int rentalExpiryHours = 1;
-  
+
   // UI Constants
   static const double defaultPadding = 16.0;
   static const double defaultRadius = 12.0;
-  
+
   // OAuth Redirect URLs (must match iOS Info.plist CFBundleURLSchemes)
   static const String googleOAuthRedirectUrl = 'com.burnasms.app://auth-callback';
 }

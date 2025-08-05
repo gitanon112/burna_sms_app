@@ -108,16 +108,23 @@ class BurnaService {
     required String countryCode,
   }) async {
     _ensureDaisyClient();
-    
+
     print('BurnaService: Starting purchase - service: $serviceCode, country: $countryCode');
-    
+
     final currentUser = _supabaseService.currentUser;
     if (currentUser == null) {
       throw Exception('User not authenticated');
     }
-    
+
+    // Enforce wallet balance before allowing purchase
+    final userProfile = await _supabaseService.getCurrentUserProfile();
+    final walletCents = userProfile?.walletBalanceCents ?? 0;
+    if (walletCents <= 0) {
+      throw Exception('Insufficient wallet balance. Please top up before purchasing a number.');
+    }
+
     print('BurnaService: User authenticated - ${currentUser.email}');
-    
+
     try {
       // Get service pricing
       print('BurnaService: Getting available services...');
