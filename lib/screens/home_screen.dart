@@ -46,7 +46,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
   String? _errorMessage;
   String _searchQuery = '';
   bool _showAllServices = false;
-  
+  // History toggle state: 'rentals' or 'payments'
+  String _historyView = 'rentals';
+  List<Map<String, dynamic>> _payments = [];
+
   @override
   void initState() {
     super.initState();
@@ -208,7 +211,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
   // Replace calls to _buildEnhancedRentalCard with _buildCompactRentalTile already added earlier.
 
   // No changes needed to BillingService usage; just ensure import exists at top.
-  // Ensure WALLET pill is not referenced anymore in active rentals rendering.
+  // Ensure WALLET pill is not referenced anymore in active rentals rendering
   Future<void> _onResumed() async {
     try {
       final cents = await _supabaseService.hardRefreshWalletBalanceCents();
@@ -270,6 +273,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
       await Future.wait([
         _loadAvailableServices(),
         _loadActiveRentals(),
+        _loadPayments(),
       ]);
       
     } catch (e) {
@@ -354,9 +358,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
 
       for (final rental in rentals) {
         final expiresUtc = rental.expiresAt.toUtc();
-        final expiredFlag = expiresUtc.isBefore(nowUtc);
-        final status = rental.status.toLowerCase();
-        //print('HomeScreen: Rental ${rental.id} - Status: ${rental.status}, Active: ${status == 'active'}, ExpiredByTime(UTC): $expiredFlag, ExpiresAt(UTC): $expiresUtc');
+        // Removed unused locals to satisfy analyzer
+        // final expiredFlag = expiresUtc.isBefore(nowUtc);
+        // final status = rental.status.toLowerCase();
       }
 
       final active = rentals.where((r) {
@@ -388,6 +392,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     } catch (e) {
       //print('HomeScreen: Error loading rentals: $e');
       debugPrint('Error loading rentals: $e');
+    }
+  }
+
+  Future<void> _loadPayments() async {
+    try {
+      // Safeguard: method may not exist at runtime if hot-reload mismatch; guard with try
+      final rows = await _supabaseService.getUserPayments();
+      if (mounted) setState(() => _payments = rows);
+    } catch (e) {
+      debugPrint('Error loading payments: $e');
     }
   }
 
@@ -434,9 +448,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
                 borderRadius: BorderRadius.circular(22),
                 boxShadow: [
                   BoxShadow(
-                    color: const Color(0xFF00BCD4).withOpacity(0.3),
-                    blurRadius: 12,
-                    spreadRadius: 1,
                     offset: const Offset(0, 3),
                   ),
                 ],
@@ -447,10 +458,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
                   const SizedBox(width: 6),
                   Text(
                     '\$${(_walletBalanceCents / 100).toStringAsFixed(2)}',
-                    style: const TextStyle(
-                      color: Colors.black,
-                      fontWeight: FontWeight.w800,
-                    ),
+                    style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w800),
                   ),
                 ],
               ),
@@ -522,9 +530,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
             ),
             onSelected: (value) async {
               switch (value) {
-                case 'history':
-                  _tabController.animateTo(2);
-                  break;
                 case 'profile':
                   _showProfileDialog(context, user);
                   break;
@@ -539,14 +544,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
               }
             },
             itemBuilder: (BuildContext context) => const [
-              PopupMenuItem(
-                value: 'history',
-                child: ListTile(
-                  leading: Icon(Icons.history),
-                  title: Text('History'),
-                  contentPadding: EdgeInsets.zero,
-                ),
-              ),
               PopupMenuItem(
                 value: 'profile',
                 child: ListTile(
@@ -567,7 +564,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
                 value: 'logout',
                 child: ListTile(
                   leading: Icon(Icons.logout),
-                  title: Text('Sign Out'),
                   contentPadding: EdgeInsets.zero,
                 ),
               ),
@@ -800,19 +796,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     );
   }
 
-  // Old complex card replaced by compact dark tile list
-  Widget _buildEnhancedServiceCard(ServiceData service) {
-    final minPrice = service.availableCountries.isNotEmpty
-        ? service.availableCountries.map((c) => c.burnaPrice).reduce((a, b) => a < b ? a : b)
-        : 0.0;
-    return CompactServiceTile(
-      name: service.name,
-      priceText: '\$${minPrice.toStringAsFixed(2)}',
-      iconData: _getServiceIcon(service.name),
-      onTap: () => _showCountrySelection(service),
-    );
-  }
-
   Widget _buildActiveRentalsTab() {
     return RefreshIndicator(
       onRefresh: () async {
@@ -942,78 +925,184 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
 
   Widget _buildHistoryTab() {
     return RefreshIndicator(
-      onRefresh: _loadActiveRentals,
-      child: _historyRentals.isEmpty
-          ? _buildEmptyState(
-              icon: Icons.history,
-              title: 'No History Yet',
-              subtitle: 'Your completed and cancelled rentals will appear here',
-              actionText: 'Browse Services',
-              onAction: () => _tabController.animateTo(0),
-            )
-          : ListView.builder(
-              padding: const EdgeInsets.all(16),
-              itemCount: _historyRentals.length,
-              itemBuilder: (context, index) {
-                final rental = _historyRentals[index];
-                return _buildHistoryRentalCard(rental);
-              },
+      onRefresh: () async {
+        await _loadActiveRentals();
+        await _loadPayments();
+      },
+      child: Column(
+        children: [
+          const SizedBox(height: 8),
+          // Segmented toggle
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 16),
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0F172A),
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: const Color(0x1AFFFFFF)),
             ),
+            child: Row(
+              children: [
+                _segmentButton('Rentals', 'rentals'),
+                const SizedBox(width: 6),
+                _segmentButton('Payments', 'payments'),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: _historyView == 'rentals'
+                ? (_historyRentals.isEmpty
+                    ? _buildEmptyState(
+                        icon: Icons.history,
+                        title: 'No History Yet',
+                        subtitle: 'Your completed and cancelled rentals will appear here',
+                        actionText: 'Browse Services',
+                        onAction: () => _tabController.animateTo(0),
+                      )
+                    : ListView.builder(
+                        padding: const EdgeInsets.all(12),
+                        itemCount: _historyRentals.length,
+                        itemBuilder: (context, index) {
+                          final rental = _historyRentals[index];
+                          return _buildHistoryRentalTile(rental);
+                        },
+                      ))
+                : (_payments.isEmpty
+                    ? _buildEmptyState(
+                        icon: Icons.receipt_long,
+                        title: 'No Payments Yet',
+                        subtitle: 'Your card top-ups will appear here',
+                        actionText: 'Add Funds',
+                        onAction: () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Use + card button to add funds'))),
+                      )
+                    : ListView.builder(
+                        padding: const EdgeInsets.all(12),
+                        itemCount: _payments.length,
+                        itemBuilder: (context, index) {
+                          final p = _payments[index];
+                          return _buildPaymentTile(p);
+                        },
+                      )),
+          ),
+        ],
+      ),
     );
   }
 
-  Widget _buildHistoryRentalCard(Rental rental) {
-    // If an item is time-expired but status is still 'active', present it as CANCELLED to avoid confusing "ACTIVE in history"
-    final nowUtc = DateTime.now().toUtc();
-    final isExpiredByTime = rental.expiresAt.toUtc().isBefore(nowUtc);
-    final effectiveStatus = (rental.status.toLowerCase() == 'active' && isExpiredByTime) ? 'cancelled' : rental.status;
+  Widget _segmentButton(String label, String key) {
+    final selected = _historyView == key;
+    return Expanded(
+      child: GestureDetector(
+        onTap: () => setState(() => _historyView = key),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          decoration: BoxDecoration(
+            color: selected ? const Color(0xFF111827) : Colors.transparent,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: const Color(0x1AFFFFFF)),
+          ),
+          alignment: Alignment.center,
+          child: Text(
+            label,
+            style: TextStyle(color: selected ? Colors.white : Colors.white70, fontWeight: FontWeight.w700),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHistoryRentalTile(Rental rental) {
+    final created = rental.createdAt.toLocal();
+    final dateStr = '${created.year}-${created.month.toString().padLeft(2, '0')}-${created.day.toString().padLeft(2, '0')} ${created.hour.toString().padLeft(2, '0')}:${created.minute.toString().padLeft(2, '0')}';
+    final displayService = _expandedServiceName(rental.serviceName);
+    final effectiveStatus = rental.status.toLowerCase();
     final statusColor = _getStatusColor(effectiveStatus);
     return Container(
-      margin: const EdgeInsets.only(bottom: 16),
+      margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
       decoration: BoxDecoration(
-        color: Colors.grey.shade50,
-        borderRadius: BorderRadius.circular(12),
-        border: Border(left: BorderSide(color: statusColor, width: 4)),
+        color: const Color(0xFF0F172A),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0x1AFFFFFF)),
       ),
       child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         leading: CircleAvatar(
           backgroundColor: statusColor.withOpacity(0.15),
-          child: Icon(Icons.history, color: statusColor),
+          child: Icon(Icons.phone_iphone, color: statusColor),
         ),
         title: Text(
-          _formatUsNumberDashed(rental.phoneNumber),
-          style: const TextStyle(fontWeight: FontWeight.w600),
+          displayService,
+          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
         ),
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const SizedBox(height: 4),
-            Text('${rental.serviceName} • ${rental.countryName}'),
             const SizedBox(height: 2),
             Text(
-              'Status: ${effectiveStatus.toUpperCase()}',
-              style: TextStyle(color: statusColor, fontWeight: FontWeight.w600),
+              _formatUsNumberDashed(rental.phoneNumber),
+              style: const TextStyle(color: Colors.white70),
             ),
+            const SizedBox(height: 2),
+            Text('Date: $dateStr', style: const TextStyle(color: Colors.white54, fontSize: 12)),
+            const SizedBox(height: 2),
+            Text('Price: \$${rental.burnaPrice.toStringAsFixed(2)}', style: const TextStyle(color: Colors.white70)),
             if (rental.smsReceived != null && rental.smsReceived!.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
-                child: Text('SMS: ${rental.smsReceived!}'),
+                child: Text('SMS: ${rental.smsReceived!}', style: const TextStyle(color: Colors.white70)),
               ),
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Text(
-                'Expires: ${rental.expiresAt.toLocal()}',
-                style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
-              ),
-            ),
           ],
         ),
-        trailing: IconButton(
-          icon: const Icon(Icons.copy),
-          onPressed: () => _copyToClipboard(_digitsOnly(rental.phoneNumber)),
-          tooltip: 'Copy number',
+        trailing: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            _chip(effectiveStatus.toUpperCase(), color: Colors.transparent, borderColor: statusColor.withOpacity(0.5)),
+            const SizedBox(height: 8),
+            _squareIconButton(icon: Icons.copy, tooltip: 'Copy number', onTap: () => _copyToClipboard(_digitsOnly(rental.phoneNumber))),
+          ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildPaymentTile(Map<String, dynamic> p) {
+    final created = DateTime.tryParse(p['created_at']?.toString() ?? '')?.toLocal();
+    final dateStr = created == null ? '' : '${created.year}-${created.month.toString().padLeft(2, '0')}-${created.day.toString().padLeft(2, '0')} ${created.hour.toString().padLeft(2, '0')}:${created.minute.toString().padLeft(2, '0')}';
+    final cents = (p['amount_cents'] as num?)?.toInt() ?? 0;
+    final status = (p['status']?.toString() ?? '').toLowerCase();
+    final statusColor = _getStatusColor(status == 'succeeded' ? 'completed' : status);
+    final pi = (p['payment_intent_id']?.toString() ?? '');
+    final shortPi = pi.length > 18 ? '${pi.substring(0,18)}...' : pi;
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F172A),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0x1AFFFFFF)),
+      ),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        leading: CircleAvatar(
+          backgroundColor: statusColor.withOpacity(0.15),
+          child: const Icon(Icons.receipt_long, color: Colors.white),
+        ),
+        title: Text(
+          '\$${(cents / 100).toStringAsFixed(2)}',
+          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+        ),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (dateStr.isNotEmpty) Text(dateStr, style: const TextStyle(color: Colors.white70)),
+            const SizedBox(height: 2),
+            Text('Status: ${p['status']}', style: const TextStyle(color: Colors.white70)),
+            const SizedBox(height: 2),
+            Text('Intent: $shortPi', style: const TextStyle(color: Colors.white54, fontSize: 12)),
+          ],
+        ),
+        trailing: _chip(status.toUpperCase(), color: Colors.transparent, borderColor: statusColor.withOpacity(0.5)),
       ),
     );
   }
@@ -1169,6 +1258,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     }
   }
 
+  // Unused helper retained for reference: _checkSMS
   Future<void> _checkSMS(Rental rental) async {
     try {
       final updatedRental = await _daisyService.checkSms(rental.id);

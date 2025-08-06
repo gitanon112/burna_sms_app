@@ -359,4 +359,15 @@ class SupabaseService {
     debugPrint('SupabaseService.debugCurrentUserId: $id');
     return id;
   }
+
+  // Payments (Stripe) management for History view
+  Future<List<Map<String, dynamic>>> getUserPayments() async {
+    if (!isAuthenticated) return [];
+    final rows = await client
+        .from('stripe_payments')
+        .select('payment_intent_id,status,amount_cents,currency,created_at,updated_at')
+        .eq('user_id', currentUser!.id)
+        .order('created_at', ascending: false);
+    return List<Map<String, dynamic>>.from(rows);
+  }
 }
