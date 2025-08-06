@@ -4,6 +4,7 @@ import '../models/rental.dart';
 import '../models/service_data.dart';
 import 'daisy_sms_client.dart';
 import 'supabase_service.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 /// Main business service that replaces the Python backend
 /// Combines DaisySMS API calls with Supabase database operations
@@ -332,17 +333,50 @@ class BurnaService {
       if (rental == null || rental.status != 'active') { return false; }
       bool cancelledOnDaisy = false;
       try { cancelledOnDaisy = await _daisyClient!.cancelRental(rental.daisyRentalId); } catch (_) {}
+
+      // Debug: log current auth role/sub just before refund (if helper RPC exists)
+      try {
+        final dbg = await Supabase.instance.client.rpc('test_authorization_header');
+        // ignore: avoid_print
+        print('Auth debug before refund: role=${dbg['role']}, sub=${dbg['sub']}');
+      } catch (_) {
+        // ignore: not fatal if helper is not present
+      }
+
       // Refund first (so UI pill updates instantly), then mark cancelled
       try {
-        final holdId = rental.walletHoldId;
+        String? holdId = rental.walletHoldId;
+        // Fallback: if rental lacks hold id, resolve via RPC by rental_id
+        if (holdId == null || holdId.isEmpty) {
+          try {
+            final res = await Supabase.instance.client.rpc('get_active_hold_for_rental', params: {
+              'p_rental_id': rental.id,
+            });
+            holdId = (res as String?);
+          } catch (_) {}
+        }
         if (holdId != null && holdId.isNotEmpty) {
-          final newBal = await _supabaseService.walletRefundHold(holdId: holdId, reason: 'User cancelled rental');
+          Future<int> doRefund() => _supabaseService.walletRefundHold(holdId: holdId!, reason: 'User cancelled rental');
+          int newBal;
+          try {
+            newBal = await doRefund();
+          } catch (e) {
+            final msg = e.toString();
+            // One-shot retry on common auth/ownership race conditions
+            if (msg.contains('unauthorized') || msg.contains('hold_not_found_for_user')) {
+              await Future.delayed(const Duration(milliseconds: 650));
+              newBal = await doRefund();
+            } else {
+              rethrow;
+            }
+          }
           try { onWalletBalanceChanged?.call(newBal); } catch (_) {}
           try { await _supabaseService.hardRefreshWalletBalanceCents(); } catch (_) {}
         }
       } catch (e) {
         print('BurnaService: wallet refund failed for rental $rentalId: $e');
       }
+
       await _supabaseService.updateRental(rentalId, {'status': 'cancelled'});
       if (cancelledOnDaisy) {
         print('BurnaService: Cancelled rental $rentalId on Daisy and refunded hold');
