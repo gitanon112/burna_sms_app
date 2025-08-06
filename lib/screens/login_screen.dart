@@ -16,204 +16,160 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFF0B0F1A),
       body: Container(
-        decoration: BoxDecoration(
+        decoration: const BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [
-              Theme.of(context).colorScheme.primary.withOpacity(0.8),
-              Theme.of(context).colorScheme.primary,
-            ],
+            colors: [Color(0xFF0B0F1A), Color(0xFF0F172A)],
           ),
         ),
         child: SafeArea(
           child: Padding(
             padding: const EdgeInsets.all(AppConstants.defaultPadding),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // Logo and Title Section
-                const Icon(
-                  Icons.sms,
-                  size: 100,
-                  color: Colors.white,
-                ),
-                const SizedBox(height: 24),
-                
-                const Text(
-                  AppConstants.appName,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 36,
-                    fontWeight: FontWeight.bold,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const SizedBox(height: 36),
+                  // Logo and Title Section
+                  const Icon(
+                    Icons.sms,
+                    size: 96,
                     color: Colors.white,
                   ),
-                ),
-                const SizedBox(height: 8),
-                
-                const Text(
-                  'Virtual Phone Numbers for SMS Verification',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 16,
-                    color: Colors.white70,
+                  const SizedBox(height: 18),
+                  const Text(
+                    AppConstants.appName,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 34,
+                      fontWeight: FontWeight.w800,
+                      color: Colors.white,
+                      letterSpacing: 0.5,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 64),
-                
-                // Welcome Card
-                Card(
-                  elevation: 8,
-                  child: Padding(
-                    padding: const EdgeInsets.all(24.0),
-                    child: Column(
-                      children: [
-                        const Text(
-                          'Welcome to Burna SMS',
-                          style: TextStyle(
-                            fontSize: 24,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        
-                        const Text(
-                          'Sign in to access virtual phone numbers for SMS verification',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: Colors.grey,
-                          ),
-                        ),
-                        const SizedBox(height: 32),
-                        
-                        // Google Sign In Button
-                        SizedBox(
-                          width: double.infinity,
-                          child: ElevatedButton.icon(
-                            onPressed: _isLoading ? null : _signInWithGoogle,
-                            icon: _isLoading 
-                              ? const SizedBox(
-                                  width: 20,
-                                  height: 20,
-                                  child: CircularProgressIndicator(strokeWidth: 2),
-                                )
-                              : Image.asset(
-                                  'assets/images/google_logo.png',
-                                  width: 24,
-                                  height: 24,
-                                  errorBuilder: (context, error, stackTrace) {
-                                    return const Icon(Icons.login, size: 24);
-                                  },
-                                ),
-                            label: Text(
-                              _isLoading ? 'Signing in...' : 'Sign in with Google',
-                              style: const TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.white,
-                              foregroundColor: Colors.black87,
-                              padding: const EdgeInsets.symmetric(vertical: 16),
-                            ),
-                          ),
-                        ),
-                        
-                        // Error message display
-                        Consumer<AuthProvider>(
-                          builder: (context, authProvider, child) {
-                            if (authProvider.errorMessage != null) {
-                              return Padding(
-                                padding: const EdgeInsets.only(top: 16),
-                                child: Container(
-                                  padding: const EdgeInsets.all(12),
-                                  decoration: BoxDecoration(
-                                    color: Colors.red.shade50,
-                                    borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(color: Colors.red.shade200),
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      Icon(
-                                        Icons.error_outline,
-                                        color: Colors.red.shade700,
-                                        size: 20,
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Expanded(
-                                        child: Text(
-                                          authProvider.errorMessage!,
-                                          style: TextStyle(
-                                            color: Colors.red.shade700,
-                                            fontSize: 12,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              );
-                            }
-                            return const SizedBox.shrink();
-                          },
-                        ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Virtual Phone Numbers for SMS Verification',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: Colors.white70,
+                    ),
+                  ),
+                  const SizedBox(height: 32),
+                  // Welcome Card
+                  Container(
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0F172A).withValues(alpha: 0.9),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: const Color(0x1AFFFFFF)),
+                      boxShadow: const [
+                        BoxShadow(blurRadius: 10, color: Colors.black26, offset: Offset(0, 6)),
                       ],
                     ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(20.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          const Text(
+                            'Welcome to Burna SMS',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.w800,
+                              color: Colors.white,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          const Text(
+                            'Sign in to access virtual phone numbers for SMS verification',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.white60,
+                            ),
+                          ),
+                          const SizedBox(height: 20),
+                          SizedBox(
+                            width: double.infinity,
+                            child: OutlinedButton.icon(
+                              onPressed: _isLoading ? null : _signInWithGoogle,
+                              icon: _isLoading
+                                  ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(strokeWidth: 2),
+                                    )
+                                  : const Icon(Icons.login, size: 20, color: Colors.white),
+                              label: Text(
+                                _isLoading ? 'Signing in...' : 'Sign in with Google',
+                                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Colors.white),
+                              ),
+                              style: OutlinedButton.styleFrom(
+                                side: const BorderSide(color: Color(0x33FFFFFF)),
+                                padding: const EdgeInsets.symmetric(vertical: 14),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                backgroundColor: const Color(0xFF111827),
+                              ),
+                            ),
+                          ),
+                          Consumer<AuthProvider>(
+                            builder: (context, authProvider, child) {
+                              if (authProvider.errorMessage != null) {
+                                return Padding(
+                                  padding: const EdgeInsets.only(top: 16),
+                                  child: Container(
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0x33FF5252),
+                                      borderRadius: BorderRadius.circular(10),
+                                      border: Border.all(color: const Color(0x66FF5252)),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        const Icon(Icons.error_outline, color: Colors.redAccent, size: 18),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(
+                                            authProvider.errorMessage!,
+                                            style: const TextStyle(color: Colors.white70, fontSize: 12),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              }
+                              return const SizedBox.shrink();
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
-                ),
-                
-                const SizedBox(height: 32),
-                
-                // Features Section
-                const Text(
-                  'Features:',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
+                  const SizedBox(height: 24),
+                  const Text(
+                    'Features:',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                      color: Colors.white,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 12),
-                
-                const Row(
-                  children: [
-                    Icon(Icons.check_circle, color: Colors.white70, size: 20),
-                    SizedBox(width: 8),
-                    Text(
-                      'Virtual phone numbers from multiple countries',
-                      style: TextStyle(color: Colors.white70, fontSize: 14),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                
-                const Row(
-                  children: [
-                    Icon(Icons.check_circle, color: Colors.white70, size: 20),
-                    SizedBox(width: 8),
-                    Text(
-                      'Instant SMS verification for popular services',
-                      style: TextStyle(color: Colors.white70, fontSize: 14),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                
-                const Row(
-                  children: [
-                    Icon(Icons.check_circle, color: Colors.white70, size: 20),
-                    SizedBox(width: 8),
-                    Text(
-                      'Real-time SMS delivery and notifications',
-                      style: TextStyle(color: Colors.white70, fontSize: 14),
-                    ),
-                  ],
-                ),
-              ],
+                  const SizedBox(height: 10),
+                  const _FeatureLine(text: 'Virtual phone numbers from multiple countries'),
+                  const SizedBox(height: 6),
+                  const _FeatureLine(text: 'Instant SMS verification for popular services'),
+                  const SizedBox(height: 6),
+                  const _FeatureLine(text: 'Real-time SMS delivery and notifications'),
+                  const SizedBox(height: 36),
+                ],
+              ),
             ),
           ),
         ),
@@ -273,5 +229,22 @@ class _LoginScreenState extends State<LoginScreen> {
         });
       }
     }
+  }
+}
+
+class _FeatureLine extends StatelessWidget {
+  const _FeatureLine({required this.text});
+  final String text;
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        const Icon(Icons.check_circle, color: Colors.white70, size: 18),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(text, style: const TextStyle(color: Colors.white70, fontSize: 14)),
+        ),
+      ],
+    );
   }
 }

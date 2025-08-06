@@ -50,6 +50,8 @@ class AuthProvider with ChangeNotifier {
       case AuthChangeEvent.passwordRecovery:
         // Handle password recovery if needed
         break;
+      // AuthChangeEvent.userDeleted is deprecated; treat same as signed out.
+      // ignore: deprecated_member_use
       case AuthChangeEvent.userDeleted:
         _handleSignedOut();
         break;

@@ -41,7 +41,7 @@ class SupabaseService {
       // Auth flow completes via onAuthStateChange; if no exception, consider initiated.
       return true;
     } catch (e) {
-      print('Google OAuth error: $e');
+      debugPrint('Google OAuth error: $e');
       return false;
     }
   }

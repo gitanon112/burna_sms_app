@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:flutter/foundation.dart';
 
 /// Direct DaisySMS API client for Flutter
 /// Ported from burna-sms/backend/daisy_client.py
@@ -19,12 +20,12 @@ class DaisySMSClient {
 
     final uri = Uri.parse(baseUrl).replace(queryParameters: params);
     
-    print('DaisySMS Request: ${uri.toString()}');
+    debugPrint('DaisySMS Request: ${uri.toString()}');
 
     try {
       final response = await http.get(uri);
       
-      print('DaisySMS Response (${response.statusCode}): ${response.body}');
+      debugPrint('DaisySMS Response (${response.statusCode}): ${response.body}');
       
       if (response.statusCode == 200) {
         return response.body;
@@ -157,11 +158,11 @@ class DaisySMSClient {
       }
 
       // Unknown status: just log and return null
-      print('DaisySMS getStatus for $rentalId: $response');
+      debugPrint('DaisySMS getStatus for $rentalId: $response');
       return null;
     } catch (e) {
       // Swallow network/400s here and treat as no message yet, to avoid crashing expiry handler loops
-      print('DaisySMS getStatus error for $rentalId: $e');
+      debugPrint('DaisySMS getStatus error for $rentalId: $e');
       return null;
     }
   }
@@ -182,7 +183,7 @@ class DaisySMSClient {
       await getBalance();
       return true;
     } catch (e) {
-      print('DaisySMS health check failed: $e');
+      debugPrint('DaisySMS health check failed: $e');
       return false;
     }
   }

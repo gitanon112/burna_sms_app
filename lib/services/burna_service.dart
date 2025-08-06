@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 import '../models/rental.dart';
 import '../models/service_data.dart';
@@ -49,11 +50,11 @@ class BurnaService {
         return _cachedServices!;
       }
       
-      print('BurnaService: Getting services from DaisySMS...');
+      debugPrint('BurnaService: Getting services from DaisySMS...');
       
       // Get services from DaisySMS
       final daisyServices = await _daisyClient!.getServices();
-      print('BurnaService: Received ${daisyServices.length} services from DaisySMS');
+      debugPrint('BurnaService: Received ${daisyServices.length} services from DaisySMS');
       
       final burnaServices = <String, ServiceData>{};
       
@@ -105,13 +106,13 @@ class BurnaService {
         }
       }
       
-      print('BurnaService: Processed ${burnaServices.length} services with markup');
+      debugPrint('BurnaService: Processed ${burnaServices.length} services with markup');
       final resp = ServicesResponse(services: burnaServices);
       _cachedServices = resp;
       _cachedAt = now;
       return resp;
     } catch (e) {
-      print('BurnaService ERROR: $e');
+      debugPrint('BurnaService ERROR: $e');
       throw Exception('Failed to get services: $e');
     }
   }
@@ -123,7 +124,7 @@ class BurnaService {
   }) async {
     _ensureDaisyClient();
 
-    print('BurnaService: Starting purchase - service: $serviceCode, country: $countryCode');
+    debugPrint('BurnaService: Starting purchase - service: $serviceCode, country: $countryCode');
 
     final currentUser = _supabaseService.currentUser;
     if (currentUser == null) {
@@ -136,11 +137,11 @@ class BurnaService {
       throw Exception('Insufficient wallet balance. Please top up before purchasing a number.');
     }
 
-    print('BurnaService: User authenticated - ${currentUser.email}');
+    debugPrint('BurnaService: User authenticated - ${currentUser.email}');
 
     try {
       // Get service pricing
-      print('BurnaService: Getting available services...');
+      debugPrint('BurnaService: Getting available services...');
       final services = await getAvailableServices();
 
       if (!services.services.containsKey(serviceCode)) {
@@ -156,7 +157,7 @@ class BurnaService {
       final resolvedCountryCode = 'US';
       final resolvedCountryName = 'United States';
 
-      print('BurnaService: Found pricing - original: ${pricingRef.originalPrice}, burna: ${pricingRef.burnaPrice}');
+      debugPrint('BurnaService: Found pricing - original: ${pricingRef.originalPrice}, burna: ${pricingRef.burnaPrice}');
 
       // 1) Create a wallet HOLD for success-only debit (server-authoritative)
       final burnaPriceCents = (pricingRef.burnaPrice * 100).round();
@@ -179,7 +180,7 @@ class BurnaService {
       }
       
       // 2) Rent number from DaisySMS (no country parameter)
-      print('BurnaService: Renting number from DaisySMS...');
+      debugPrint('BurnaService: Renting number from DaisySMS...');
       final maxPrice = (pricingRef.originalPrice * 1.1);
       final maxPriceStr = maxPrice.toStringAsFixed(2);
       DaisyRental daisyRental;
@@ -196,11 +197,11 @@ class BurnaService {
           // Immediate wallet refresh after refund
           try { await _supabaseService.hardRefreshWalletBalanceCents(); } catch (_) {}
         } catch (e2) {
-          print('BurnaService: Failed to refund hold after Daisy error: $e2');
+          debugPrint('BurnaService: Failed to refund hold after Daisy error: $e2');
         }
         rethrow;
       }
-      print('BurnaService: Got number from DaisySMS - ${daisyRental.number} (id: ${daisyRental.id})');
+      debugPrint('BurnaService: Got number from DaisySMS - ${daisyRental.number} (id: ${daisyRental.id})');
       
       // 3) Create rental in Supabase (store wallet_hold_id for lifecycle)
       // Use UTC for timestamps
@@ -234,7 +235,7 @@ class BurnaService {
         'wallet_hold_id': walletHoldId,
       };
       
-      print('BurnaService: Creating rental in Supabase...');
+      debugPrint('BurnaService: Creating rental in Supabase...');
       final rental = await _supabaseService.createRental(rentalData);
       // Refresh wallet again in case subscription lagged
       try {
@@ -242,7 +243,7 @@ class BurnaService {
       } catch (_) {}
       
       // Update user stats
-      print('BurnaService: Updating user profile stats...');
+      debugPrint('BurnaService: Updating user profile stats...');
       final userProfile = await _supabaseService.getCurrentUserProfile();
       if (userProfile != null) {
         final updatedProfile = userProfile.copyWith(
@@ -253,10 +254,10 @@ class BurnaService {
         await _supabaseService.updateUserProfile(updatedProfile);
       }
       
-      print('BurnaService: Purchase complete!');
+      debugPrint('BurnaService: Purchase complete!');
       return rental;
     } catch (e) {
-      print('BurnaService ERROR during purchase: $e');
+      debugPrint('BurnaService ERROR during purchase: $e');
       throw Exception('Failed to purchase number: $e');
     }
   }
@@ -310,7 +311,7 @@ class BurnaService {
           }
         } catch (e) {
           // Non-fatal for UI: log and continue; balance can be reconciled later if needed.
-          print('BurnaService: wallet commit/debit failed for rental $rentalId: $e');
+          debugPrint('BurnaService: wallet commit/debit failed for rental $rentalId: $e');
         }
         return updatedRental;
       }
@@ -338,7 +339,7 @@ class BurnaService {
       try {
         final dbg = await Supabase.instance.client.rpc('test_authorization_header');
         // ignore: avoid_print
-        print('Auth debug before refund: role=${dbg['role']}, sub=${dbg['sub']}');
+        debugPrint('Auth debug before refund: role=${dbg['role']}, sub=${dbg['sub']}');
       } catch (_) {
         // ignore: not fatal if helper is not present
       }
@@ -374,14 +375,14 @@ class BurnaService {
           try { await _supabaseService.hardRefreshWalletBalanceCents(); } catch (_) {}
         }
       } catch (e) {
-        print('BurnaService: wallet refund failed for rental $rentalId: $e');
+        debugPrint('BurnaService: wallet refund failed for rental $rentalId: $e');
       }
 
       await _supabaseService.updateRental(rentalId, {'status': 'cancelled'});
       if (cancelledOnDaisy) {
-        print('BurnaService: Cancelled rental $rentalId on Daisy and refunded hold');
+        debugPrint('BurnaService: Cancelled rental $rentalId on Daisy and refunded hold');
       } else {
-        print('BurnaService: Normalized rental $rentalId to cancelled and refunded hold (Daisy cancel false/errored)');
+        debugPrint('BurnaService: Normalized rental $rentalId to cancelled and refunded hold (Daisy cancel false/errored)');
       }
       return true;
     } catch (e) {
@@ -483,7 +484,7 @@ class BurnaService {
     if (currentUser == null) return;
     
     try {
-      print('BurnaService: Checking for expired rentals...');
+      debugPrint('BurnaService: Checking for expired rentals...');
       final rentals = await _supabaseService.getUserRentals();
       final now = DateTime.now().toUtc();
 
@@ -495,7 +496,7 @@ class BurnaService {
 
       if (expiredRentals.isEmpty) return;
 
-      print('BurnaService: Found ${expiredRentals.length} expired rentals');
+      debugPrint('BurnaService: Found ${expiredRentals.length} expired rentals');
 
       for (final rental in expiredRentals) {
         try {
@@ -526,9 +527,9 @@ class BurnaService {
                 try { await _supabaseService.hardRefreshWalletBalanceCents(); } catch (_) {}
               }
             } catch (e) {
-              print('BurnaService: commit/debit failed on late SMS for ${rental.id}: $e');
+              debugPrint('BurnaService: commit/debit failed on late SMS for ${rental.id}: $e');
             }
-            print('BurnaService: Completed rental ${rental.id} via late SMS');
+            debugPrint('BurnaService: Completed rental ${rental.id} via late SMS');
             continue;
           }
 
@@ -549,12 +550,12 @@ class BurnaService {
               try { await _supabaseService.hardRefreshWalletBalanceCents(); } catch (_) {}
             }
           } catch (e) {
-            print('BurnaService: refund failed on expiry for ${rental.id}: $e');
+            debugPrint('BurnaService: refund failed on expiry for ${rental.id}: $e');
           }
-          print('BurnaService: Normalized expired rental ${rental.id} to cancelled and refunded hold.');
+          debugPrint('BurnaService: Normalized expired rental ${rental.id} to cancelled and refunded hold.');
         } catch (e) {
           // Never throw...
-          print('BurnaService: Error handling expired rental ${rental.id}: $e');
+          debugPrint('BurnaService: Error handling expired rental ${rental.id}: $e');
           // Safety flip to cancelled
           try {
             await _supabaseService.updateRental(
@@ -570,7 +571,7 @@ class BurnaService {
         }
       }
     } catch (e) {
-      print('BurnaService: Error checking expired rentals: $e');
+      debugPrint('BurnaService: Error checking expired rentals: $e');
     }
   }
 

@@ -7,15 +7,13 @@ class LoadingScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFF0B0F1A),
       body: Container(
-        decoration: BoxDecoration(
+        decoration: const BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [
-              Theme.of(context).colorScheme.primary.withOpacity(0.8),
-              Theme.of(context).colorScheme.primary,
-            ],
+            colors: [Color(0xFF0B0F1A), Color(0xFF0F172A)],
           ),
         ),
         child: const Center(
@@ -35,22 +33,22 @@ class LoadingScreen extends StatelessWidget {
                 AppConstants.appName,
                 style: TextStyle(
                   fontSize: 32,
-                  fontWeight: FontWeight.bold,
+                  fontWeight: FontWeight.w800,
                   color: Colors.white,
                 ),
               ),
-              SizedBox(height: 48),
+              SizedBox(height: 32),
               
               // Loading Indicator
               CircularProgressIndicator(
                 valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
               ),
-              SizedBox(height: 16),
+              SizedBox(height: 12),
               
               Text(
                 'Loading...',
                 style: TextStyle(
-                  fontSize: 16,
+                  fontSize: 14,
                   color: Colors.white70,
                 ),
               ),

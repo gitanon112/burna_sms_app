@@ -34,6 +34,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
   final Map<String, DateTime> _lingerUntil = {};
   // Remove old local profile channel field if present and replace with rentals + pollers
   // Re-declare safely, guarding duplicates:
+  // The profile channel is retained for backward compatibility but not used.
+  // Prefix with underscore and ignore analyzer for unused field.
+  // ignore: unused_field
   RealtimeChannel? _profileChannel; // keep if referenced elsewhere but we won't use it now
 
   // Add (only once): rentals realtime and polling management
@@ -215,10 +218,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
   Future<void> _onResumed() async {
     try {
       final cents = await _supabaseService.hardRefreshWalletBalanceCents();
-      if (mounted) {
-        setState(() => _walletBalanceCents = cents);
-      }
+      if (!mounted) return;
+      setState(() => _walletBalanceCents = cents);
     } catch (_) {}
+    if (!mounted) return;
     await _refreshWallet();
   }
   
@@ -356,13 +359,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
       // Clean up expired linger windows using UTC
       _lingerUntil.removeWhere((_, until) => until.isBefore(nowUtc));
 
-      for (final rental in rentals) {
-        final expiresUtc = rental.expiresAt.toUtc();
-        // Removed unused locals to satisfy analyzer
-        // final expiredFlag = expiresUtc.isBefore(nowUtc);
-        // final status = rental.status.toLowerCase();
-      }
-
       final active = rentals.where((r) {
         final status = r.status.toLowerCase();
         final expiresUtc = r.expiresAt.toUtc();
@@ -381,8 +377,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
         return isCompleted && !isLingering;
       }).toList();
 
-      //print('HomeScreen: Found ${active.length} active rentals; ${history.length} history rentals');
-
       if (mounted) {
         setState(() {
           _activeRentals = active;
@@ -390,7 +384,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
         });
       }
     } catch (e) {
-      //print('HomeScreen: Error loading rentals: $e');
       debugPrint('Error loading rentals: $e');
     }
   }
@@ -468,9 +461,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
             tooltip: 'Add funds',
             icon: const Icon(Icons.add_card_rounded, color: Colors.white),
             onPressed: () async {
+              // Capture messenger early to avoid context after async gaps
+              final messenger = ScaffoldMessenger.of(context);
               // Prompt for any amount in USD
               final controller = TextEditingController(text: '5.00');
-              final amount = await showDialog<double?>(
+              final amount = await showDialog<double?> (
                 context: context,
                 builder: (ctx) => AlertDialog(
                   title: const Text('Add Funds'),
@@ -498,8 +493,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
               if (amount == null) return;
               final cents = (amount * 100).round();
               if (cents <= 0) {
-                if (!mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
+                messenger.showSnackBar(
                   const SnackBar(content: Text('Enter a valid amount'), backgroundColor: Colors.orange),
                 );
                 return;
@@ -507,15 +501,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
 
               try {
                 final opened = await BillingService().openExternalCheckout(amountCents: cents);
-                if (!mounted) return;
                 if (opened) {
-                  ScaffoldMessenger.of(context).showSnackBar(
+                  messenger.showSnackBar(
                     const SnackBar(content: Text('Opening secure Checkout...'), backgroundColor: Colors.blue),
                   );
                 }
               } catch (e) {
-                if (!mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
+                messenger.showSnackBar(
                   SnackBar(content: Text('Unable to open Checkout: $e'), backgroundColor: Colors.red),
                 );
               }
@@ -527,6 +519,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
               radius: 16,
               backgroundColor: Color(0xFF12192E),
               child: Icon(Icons.person, color: Colors.white),
+            ),
+            color: const Color(0xFF0F172A),
+            elevation: 6,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+              side: const BorderSide(color: Color(0x1AFFFFFF)),
             ),
             onSelected: (value) async {
               switch (value) {
@@ -543,28 +541,38 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
                   break;
               }
             },
-            itemBuilder: (BuildContext context) => const [
+            itemBuilder: (BuildContext context) => [
               PopupMenuItem(
                 value: 'profile',
-                child: ListTile(
-                  leading: Icon(Icons.person),
-                  title: Text('Profile'),
-                  contentPadding: EdgeInsets.zero,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Row(
+                  children: const [
+                    Icon(Icons.person, color: Colors.white70),
+                    SizedBox(width: 12),
+                    Text('Profile', style: TextStyle(color: Colors.white)),
+                  ],
                 ),
               ),
               PopupMenuItem(
                 value: 'refresh',
-                child: ListTile(
-                  leading: Icon(Icons.refresh),
-                  title: Text('Refresh'),
-                  contentPadding: EdgeInsets.zero,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Row(
+                  children: const [
+                    Icon(Icons.refresh, color: Colors.white70),
+                    SizedBox(width: 12),
+                    Text('Refresh', style: TextStyle(color: Colors.white)),
+                  ],
                 ),
               ),
               PopupMenuItem(
                 value: 'logout',
-                child: ListTile(
-                  leading: Icon(Icons.logout),
-                  contentPadding: EdgeInsets.zero,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Row(
+                  children: const [
+                    Icon(Icons.logout, color: Colors.white70),
+                    SizedBox(width: 12),
+                    Text('Logout', style: TextStyle(color: Colors.white)),
+                  ],
                 ),
               ),
             ],
@@ -1026,41 +1034,51 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
         border: Border.all(color: const Color(0x1AFFFFFF)),
       ),
       child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        dense: true,
+        visualDensity: const VisualDensity(horizontal: 0, vertical: -2),
         leading: CircleAvatar(
-          backgroundColor: statusColor.withOpacity(0.15),
+          backgroundColor: statusColor.withValues(alpha: 0.15),
           child: Icon(Icons.phone_iphone, color: statusColor),
         ),
         title: Text(
           displayService,
           style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
         ),
-        subtitle: Column(
+        subtitle: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const SizedBox(height: 2),
-            Text(
-              _formatUsNumberDashed(rental.phoneNumber),
-              style: const TextStyle(color: Colors.white70),
-            ),
-            const SizedBox(height: 2),
-            Text('Date: $dateStr', style: const TextStyle(color: Colors.white54, fontSize: 12)),
-            const SizedBox(height: 2),
-            Text('Price: \$${rental.burnaPrice.toStringAsFixed(2)}', style: const TextStyle(color: Colors.white70)),
-            if (rental.smsReceived != null && rental.smsReceived!.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Text('SMS: ${rental.smsReceived!}', style: const TextStyle(color: Colors.white70)),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(height: 2),
+                  Text(_formatUsNumberDashed(rental.phoneNumber), style: const TextStyle(color: Colors.white70), maxLines: 1, overflow: TextOverflow.ellipsis),
+                  const SizedBox(height: 2),
+                  Text('Date: $dateStr', style: const TextStyle(color: Colors.white54, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
+                  const SizedBox(height: 2),
+                  Text('Price: \$${rental.burnaPrice.toStringAsFixed(2)}', style: const TextStyle(color: Colors.white70), maxLines: 1, overflow: TextOverflow.ellipsis),
+                  if (rental.smsReceived != null && rental.smsReceived!.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text('SMS: ${rental.smsReceived!}', style: const TextStyle(color: Colors.white70), maxLines: 1, overflow: TextOverflow.ellipsis),
+                    ),
+                ],
               ),
-          ],
-        ),
-        trailing: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            _chip(effectiveStatus.toUpperCase(), color: Colors.transparent, borderColor: statusColor.withOpacity(0.5)),
-            const SizedBox(height: 8),
-            _squareIconButton(icon: Icons.copy, tooltip: 'Copy number', onTap: () => _copyToClipboard(_digitsOnly(rental.phoneNumber))),
+            ),
+            const SizedBox(width: 8),
+            // Compact right-side actions to avoid vertical overflow
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _chip(effectiveStatus.toUpperCase(), color: Colors.transparent, borderColor: statusColor.withValues(alpha: 0.5)),
+                const SizedBox(height: 6),
+                _squareIconButton(icon: Icons.copy, tooltip: 'Copy number', onTap: () => _copyToClipboard(_digitsOnly(rental.phoneNumber))),
+              ],
+            ),
           ],
         ),
       ),
@@ -1083,26 +1101,41 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
         border: Border.all(color: const Color(0x1AFFFFFF)),
       ),
       child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        dense: true,
+        visualDensity: const VisualDensity(horizontal: 0, vertical: -2),
+        minVerticalPadding: 6,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
         leading: CircleAvatar(
-          backgroundColor: statusColor.withOpacity(0.15),
+          backgroundColor: statusColor.withValues(alpha: 0.15),
           child: const Icon(Icons.receipt_long, color: Colors.white),
         ),
         title: Text(
           '\$${(cents / 100).toStringAsFixed(2)}',
           style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
         ),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        subtitle: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            if (dateStr.isNotEmpty) Text(dateStr, style: const TextStyle(color: Colors.white70)),
-            const SizedBox(height: 2),
-            Text('Status: ${p['status']}', style: const TextStyle(color: Colors.white70)),
-            const SizedBox(height: 2),
-            Text('Intent: $shortPi', style: const TextStyle(color: Colors.white54, fontSize: 12)),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (dateStr.isNotEmpty)
+                    Text(dateStr, style: const TextStyle(color: Colors.white70, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
+                  Text('Status: ${p['status']}', style: const TextStyle(color: Colors.white70, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
+                  Text('Intent: $shortPi', style: const TextStyle(color: Colors.white54, fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            _chip(
+              status.toUpperCase(),
+              color: Colors.transparent,
+              borderColor: statusColor.withValues(alpha: 0.5),
+            ),
           ],
         ),
-        trailing: _chip(status.toUpperCase(), color: Colors.transparent, borderColor: statusColor.withOpacity(0.5)),
       ),
     );
   }
@@ -1221,11 +1254,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     return Icons.business;
   }
 
-  // Country selection removed for US-only app. Kept for backward compatibility; not shown.
-  void _showCountrySelection(ServiceData service) {
-    // No-op: always rent with US upstream.
-  }
-
   Future<void> _purchaseNumber(String serviceCode, String countryCode) async {
     try {
       final rental = await _daisyService.purchaseNumber(
@@ -1251,47 +1279,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Purchase failed: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
-  }
-
-  // Unused helper retained for reference: _checkSMS
-  Future<void> _checkSMS(Rental rental) async {
-    try {
-      final updatedRental = await _daisyService.checkSms(rental.id);
-      
-      if (updatedRental.smsReceived != null && updatedRental.smsReceived!.isNotEmpty) {
-        // Linger successful code in My Numbers for 60s (no extra DB writes here)
-        _lingerUntil[updatedRental.id] = DateTime.now().add(const Duration(seconds: 60));
-        await _loadActiveRentals();
-        
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('SMS received: ${updatedRental.smsReceived}'),
-              backgroundColor: Colors.green,
-            ),
-          );
-        }
-      } else {
-        // no code yet: do nothing special
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('No SMS received yet'),
-              backgroundColor: Colors.orange,
-            ),
-          );
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error checking SMS: $e'),
             backgroundColor: Colors.red,
           ),
         );
@@ -1364,40 +1351,49 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Profile'),
+        backgroundColor: const Color(0xFF0F172A),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+          side: const BorderSide(color: Color(0x1AFFFFFF)),
+        ),
+        title: const Text('Profile', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            ListTile(
-              leading: const Icon(Icons.email),
-              title: Text(user?.email ?? 'No email'),
-              contentPadding: EdgeInsets.zero,
-            ),
-            ListTile(
-              leading: const Icon(Icons.attach_money),
-              title: Text('Total Spent: \$${user?.totalSpent.toStringAsFixed(2) ?? '0.00'}'),
-              contentPadding: EdgeInsets.zero,
-            ),
-            ListTile(
-              leading: const Icon(Icons.phone),
-              title: Text('Total Rentals: ${user?.totalRentals ?? 0}'),
-              contentPadding: EdgeInsets.zero,
-            ),
-            ListTile(
-              leading: const Icon(Icons.calendar_today),
-              title: Text('Member since ${user?.createdAt.toLocal().toString().split(' ')[0] ?? 'Unknown'}'),
-              contentPadding: EdgeInsets.zero,
-            ),
+            _profileRow(icon: Icons.email, text: user?.email ?? 'No email'),
+            const SizedBox(height: 10),
+            _profileRow(icon: Icons.attach_money, text: 'Total Spent: \$${user?.totalSpent.toStringAsFixed(2) ?? '0.00'}'),
+            const SizedBox(height: 10),
+            _profileRow(icon: Icons.phone_iphone, text: 'Total Rentals: ${user?.totalRentals ?? 0}'),
+            const SizedBox(height: 10),
+            _profileRow(icon: Icons.calendar_today, text: 'Member since ${user?.createdAt.toLocal().toString().split(' ')[0] ?? 'Unknown'}'),
           ],
         ),
+        actionsPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Close'),
+            child: const Text('Close', style: TextStyle(color: Colors.white70)),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _profileRow({required IconData icon, required String text}) {
+    return Row(
+      children: [
+        Icon(icon, color: Colors.white70),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(
+            text,
+            style: const TextStyle(color: Colors.white70),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
     );
   }
 

@@ -14,7 +14,7 @@ class AuthWrapper extends StatelessWidget {
       builder: (context, authProvider, child) {
         switch (authProvider.status) {
           case AuthStatus.loading:
-            return const LoadingScreen();
+            return const Scaffold(backgroundColor: Color(0xFF0B0F1A), body: LoadingScreen());
           case AuthStatus.authenticated:
             return const HomeScreen();
           case AuthStatus.unauthenticated:
