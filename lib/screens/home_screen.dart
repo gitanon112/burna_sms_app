@@ -53,6 +53,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     WidgetsBinding.instance.addObserver(this);
     _tabController = TabController(length: 3, vsync: this);
 
+    // Wire wallet instant updates from BurnaService
+    _daisyService.onWalletBalanceChanged = (cents) {
+      if (!mounted) return;
+      setState(() => _walletBalanceCents = cents);
+    };
+
     _loadInitialData().then((_) {
       // After initial load, align pollers with current active rentals
       _syncRentalPollers();

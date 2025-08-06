@@ -168,11 +168,10 @@ class BurnaService {
           reason: 'Hold for $serviceCode $resolvedCountryCode rental',
         );
         walletHoldId = holdRes.holdId;
-        print('BurnaService: Created wallet hold $walletHoldId for $burnaPriceCents cents');
-        // Force-refresh wallet pill immediately after hold (optimistic feedback)
-        try {
-          await _supabaseService.hardRefreshWalletBalanceCents();
-        } catch (_) {}
+        // Immediately push new balance to UI
+        try { onWalletBalanceChanged?.call(holdRes.balanceAfterCents); } catch (_) {}
+        // Fallback hard refresh as safety
+        try { await _supabaseService.hardRefreshWalletBalanceCents(); } catch (_) {}
       } catch (e) {
         // Fail fast if hold cannot be created
         throw Exception('Unable to place wallet hold: $e');
@@ -295,11 +294,10 @@ class BurnaService {
         try {
           final holdId = updatedRental.walletHoldId;
           if (holdId != null && holdId.isNotEmpty) {
-            await _supabaseService.walletCommitHold(holdId: holdId);
-            // Refresh wallet after commit so pill updates instantly
+            final newBal = await _supabaseService.walletCommitHold(holdId: holdId);
+            try { onWalletBalanceChanged?.call(newBal); } catch (_) {}
             try { await _supabaseService.hardRefreshWalletBalanceCents(); } catch (_) {}
           } else {
-            // Legacy fallback for existing rows without hold linkage
             final amountCents = (updatedRental.burnaPrice * 100).round();
             await _supabaseService.debitWalletOnSuccess(
               userId: currentUser.id,
@@ -307,7 +305,7 @@ class BurnaService {
               rentalId: rentalId,
               reason: 'SMS code received for ${updatedRental.serviceName} (${updatedRental.countryName})',
             );
-            try { await _supabaseService.hardRefreshWalletBalanceCents(); } catch (_) {}
+            try { final c = await _supabaseService.hardRefreshWalletBalanceCents(); onWalletBalanceChanged?.call(c); } catch (_) {}
           }
         } catch (e) {
           // Non-fatal for UI: log and continue; balance can be reconciled later if needed.
@@ -325,44 +323,27 @@ class BurnaService {
   /// Cancel a rental (user-initiated)
   Future<bool> cancelRental(String rentalId) async {
     _ensureDaisyClient();
-    
     final currentUser = _supabaseService.currentUser;
-    if (currentUser == null) {
-      throw Exception('User not authenticated');
-    }
-    
+    if (currentUser == null) { throw Exception('User not authenticated'); }
     try {
-      // Get rental from database
-      final rental = await _supabaseService.getRentalById(rentalId);
-      if (rental == null || rental.status != 'active') {
-        return false;
-      }
-      
-      // Cancel on DaisySMS; if Daisy returns false, still proceed to normalize locally
+      // Fetch fresh rental to ensure wallet_hold_id present
+      final fresh = await _supabaseService.getRentalById(rentalId);
+      final rental = fresh;
+      if (rental == null || rental.status != 'active') { return false; }
       bool cancelledOnDaisy = false;
-      try {
-        cancelledOnDaisy = await _daisyClient!.cancelRental(rental.daisyRentalId);
-      } catch (e) {
-        // Log but continue to normalize locally; Daisy may have already transitioned the activation
-        print('BurnaService: Daisy cancel error for rental $rentalId: $e');
-      }
-      
-      // Update rental status to cancelled per DB constraint
-      await _supabaseService.updateRental(
-        rentalId,
-        {'status': 'cancelled'},
-      );
-      // Refund hold if present
+      try { cancelledOnDaisy = await _daisyClient!.cancelRental(rental.daisyRentalId); } catch (_) {}
+      // Refund first (so UI pill updates instantly), then mark cancelled
       try {
         final holdId = rental.walletHoldId;
-        if (holdId != null && !holdId.isEmpty) {
-          await _supabaseService.walletRefundHold(holdId: holdId, reason: 'User cancelled rental');
-          // Immediate refresh so wallet pill updates without manual refresh
+        if (holdId != null && holdId.isNotEmpty) {
+          final newBal = await _supabaseService.walletRefundHold(holdId: holdId, reason: 'User cancelled rental');
+          try { onWalletBalanceChanged?.call(newBal); } catch (_) {}
           try { await _supabaseService.hardRefreshWalletBalanceCents(); } catch (_) {}
         }
       } catch (e) {
         print('BurnaService: wallet refund failed for rental $rentalId: $e');
       }
+      await _supabaseService.updateRental(rentalId, {'status': 'cancelled'});
       if (cancelledOnDaisy) {
         print('BurnaService: Cancelled rental $rentalId on Daisy and refunded hold');
       } else {
@@ -529,7 +510,8 @@ class BurnaService {
           try {
             final holdId = rental.walletHoldId;
             if (holdId != null && holdId.isNotEmpty) {
-              await _supabaseService.walletRefundHold(holdId: holdId, reason: 'Expired rental');
+              final newBal = await _supabaseService.walletRefundHold(holdId: holdId, reason: 'Expired rental');
+              try { onWalletBalanceChanged?.call(newBal); } catch (_) {}
               try { await _supabaseService.hardRefreshWalletBalanceCents(); } catch (_) {}
             }
           } catch (e) {
@@ -594,4 +576,7 @@ class BurnaService {
   void dispose() {
     stopExpiryMonitoring();
   }
+
+  /// Optional UI callback to push wallet balance instantly after RPCs
+  void Function(int newBalanceCents)? onWalletBalanceChanged;
 }
