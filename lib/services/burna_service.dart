@@ -169,7 +169,7 @@ class BurnaService {
         );
         walletHoldId = holdRes.holdId;
         print('BurnaService: Created wallet hold $walletHoldId for $burnaPriceCents cents');
-        // Force-refresh wallet pill immediately after hold
+        // Force-refresh wallet pill immediately after hold (optimistic feedback)
         try {
           await _supabaseService.hardRefreshWalletBalanceCents();
         } catch (_) {}
@@ -193,6 +193,8 @@ class BurnaService {
         // Refund hold on failure to obtain number
         try {
           await _supabaseService.walletRefundHold(holdId: walletHoldId, reason: 'Daisy rent failed');
+          // Immediate wallet refresh after refund
+          try { await _supabaseService.hardRefreshWalletBalanceCents(); } catch (_) {}
         } catch (e2) {
           print('BurnaService: Failed to refund hold after Daisy error: $e2');
         }
@@ -294,6 +296,8 @@ class BurnaService {
           final holdId = updatedRental.walletHoldId;
           if (holdId != null && holdId.isNotEmpty) {
             await _supabaseService.walletCommitHold(holdId: holdId);
+            // Refresh wallet after commit so pill updates instantly
+            try { await _supabaseService.hardRefreshWalletBalanceCents(); } catch (_) {}
           } else {
             // Legacy fallback for existing rows without hold linkage
             final amountCents = (updatedRental.burnaPrice * 100).round();
@@ -303,6 +307,7 @@ class BurnaService {
               rentalId: rentalId,
               reason: 'SMS code received for ${updatedRental.serviceName} (${updatedRental.countryName})',
             );
+            try { await _supabaseService.hardRefreshWalletBalanceCents(); } catch (_) {}
           }
         } catch (e) {
           // Non-fatal for UI: log and continue; balance can be reconciled later if needed.
@@ -333,28 +338,37 @@ class BurnaService {
         return false;
       }
       
-      // Cancel on DaisySMS
-      final success = await _daisyClient!.cancelRental(rental.daisyRentalId);
-      
-      if (success) {
-        // Update rental status to cancelled per DB constraint
-        await _supabaseService.updateRental(
-          rentalId,
-          {'status': 'cancelled'},
-        );
-        // Refund hold if present
-        try {
-          final holdId = rental.walletHoldId;
-          if (holdId != null && holdId.isNotEmpty) {
-            await _supabaseService.walletRefundHold(holdId: holdId, reason: 'User cancelled rental');
-          }
-        } catch (e) {
-          print('BurnaService: wallet refund failed for rental $rentalId: $e');
-        }
-        return true;
+      // Cancel on DaisySMS; if Daisy returns false, still proceed to normalize locally
+      bool cancelledOnDaisy = false;
+      try {
+        cancelledOnDaisy = await _daisyClient!.cancelRental(rental.daisyRentalId);
+      } catch (e) {
+        // Log but continue to normalize locally; Daisy may have already transitioned the activation
+        print('BurnaService: Daisy cancel error for rental $rentalId: $e');
       }
       
-      return false;
+      // Update rental status to cancelled per DB constraint
+      await _supabaseService.updateRental(
+        rentalId,
+        {'status': 'cancelled'},
+      );
+      // Refund hold if present
+      try {
+        final holdId = rental.walletHoldId;
+        if (holdId != null && !holdId.isEmpty) {
+          await _supabaseService.walletRefundHold(holdId: holdId, reason: 'User cancelled rental');
+          // Immediate refresh so wallet pill updates without manual refresh
+          try { await _supabaseService.hardRefreshWalletBalanceCents(); } catch (_) {}
+        }
+      } catch (e) {
+        print('BurnaService: wallet refund failed for rental $rentalId: $e');
+      }
+      if (cancelledOnDaisy) {
+        print('BurnaService: Cancelled rental $rentalId on Daisy and refunded hold');
+      } else {
+        print('BurnaService: Normalized rental $rentalId to cancelled and refunded hold (Daisy cancel false/errored)');
+      }
+      return true;
     } catch (e) {
       throw Exception('Failed to cancel rental: $e');
     }
@@ -485,6 +499,7 @@ class BurnaService {
               final holdId = rental.walletHoldId;
               if (holdId != null && holdId.isNotEmpty) {
                 await _supabaseService.walletCommitHold(holdId: holdId);
+                try { await _supabaseService.hardRefreshWalletBalanceCents(); } catch (_) {}
               } else {
                 final amountCents = (rental.burnaPrice * 100).round();
                 await _supabaseService.debitWalletOnSuccess(
@@ -493,6 +508,7 @@ class BurnaService {
                   rentalId: rental.id,
                   reason: 'Late SMS code for ${rental.serviceName} (${rental.countryName})',
                 );
+                try { await _supabaseService.hardRefreshWalletBalanceCents(); } catch (_) {}
               }
             } catch (e) {
               print('BurnaService: commit/debit failed on late SMS for ${rental.id}: $e');
@@ -502,7 +518,9 @@ class BurnaService {
           }
 
           // Daisy API semantics normalization...
-          final cancelled = await _daisyClient!.cancelRental(rental.daisyRentalId);
+          try {
+            await _daisyClient!.cancelRental(rental.daisyRentalId);
+          } catch (_) {/* ignore */}
           await _supabaseService.updateRental(
             rental.id,
             {'status': 'cancelled'},
@@ -512,15 +530,12 @@ class BurnaService {
             final holdId = rental.walletHoldId;
             if (holdId != null && holdId.isNotEmpty) {
               await _supabaseService.walletRefundHold(holdId: holdId, reason: 'Expired rental');
+              try { await _supabaseService.hardRefreshWalletBalanceCents(); } catch (_) {}
             }
           } catch (e) {
             print('BurnaService: refund failed on expiry for ${rental.id}: $e');
           }
-          if (cancelled) {
-            print('BurnaService: Auto-cancelled expired rental ${rental.id}');
-          } else {
-            print('BurnaService: Normalized expired rental ${rental.id} to cancelled (Daisy absent/NO_ACTIVATION).');
-          }
+          print('BurnaService: Normalized expired rental ${rental.id} to cancelled and refunded hold.');
         } catch (e) {
           // Never throw...
           print('BurnaService: Error handling expired rental ${rental.id}: $e');
@@ -533,6 +548,7 @@ class BurnaService {
             final holdId = rental.walletHoldId;
             if (holdId != null && holdId.isNotEmpty) {
               await _supabaseService.walletRefundHold(holdId: holdId, reason: 'Expiry normalization');
+              try { await _supabaseService.hardRefreshWalletBalanceCents(); } catch (_) {}
             }
           } catch (_) {}
         }
