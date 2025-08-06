@@ -291,15 +291,19 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
 
   void _filterServices() {
     if (_searchQuery.isEmpty) {
-      // Only display curated popular set (USA-only offering)
-      _filteredServices = _getPopularServices();
+      // When there's no query:
+      // - If _showAllServices is true, show all available services (no whitelist)
+      // - Otherwise show curated popular subset
+      _filteredServices = _showAllServices ? List<ServiceData>.from(_availableServices) : _getPopularServices();
     } else {
+      // When there is a query, search across ALL services by name or code (no whitelist gate)
+      final q = _searchQuery.toLowerCase();
       _filteredServices = _availableServices.where((service) {
         final name = service.name.toLowerCase();
         final code = service.serviceCode.toLowerCase();
-        final allowed = _popularWhitelist().contains(code) || _popularWhitelistByName().any((n) => name.contains(n));
-        return allowed && (name.contains(_searchQuery.toLowerCase()) || code.contains(_searchQuery.toLowerCase()));
+        return name.contains(q) || code.contains(q);
       }).toList();
+      _filteredServices.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     }
   }
 
@@ -311,13 +315,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     for (final service in _availableServices) {
       final code = service.serviceCode.toLowerCase();
       final name = service.name.toLowerCase();
+      // Keep the full countries map so pricing uses true min across availableCountries
       if (allow.contains(code) || _popularWhitelistByName().any((n) => name.contains(n))) {
-        final firstEntry = service.countries.entries.isNotEmpty ? service.countries.entries.first : null;
-        out.add(ServiceData(
-          serviceCode: service.serviceCode,
-          name: service.name,
-          countries: firstEntry == null ? <String, CountryService>{} : <String, CountryService>{firstEntry.key: firstEntry.value},
-        ));
+        out.add(service);
       }
     }
     out.sort((a, b) => a.name.compareTo(b.name));
@@ -350,7 +350,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
         final expiresUtc = rental.expiresAt.toUtc();
         final expiredFlag = expiresUtc.isBefore(nowUtc);
         final status = rental.status.toLowerCase();
-        print('HomeScreen: Rental ${rental.id} - Status: ${rental.status}, Active: ${status == 'active'}, ExpiredByTime(UTC): $expiredFlag, ExpiresAt(UTC): $expiresUtc');
+        //print('HomeScreen: Rental ${rental.id} - Status: ${rental.status}, Active: ${status == 'active'}, ExpiredByTime(UTC): $expiredFlag, ExpiresAt(UTC): $expiresUtc');
       }
 
       final active = rentals.where((r) {
@@ -371,7 +371,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
         return isCompleted && !isLingering;
       }).toList();
 
-      print('HomeScreen: Found ${active.length} active rentals; ${history.length} history rentals');
+      //print('HomeScreen: Found ${active.length} active rentals; ${history.length} history rentals');
 
       if (mounted) {
         setState(() {
@@ -380,7 +380,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
         });
       }
     } catch (e) {
-      print('HomeScreen: Error loading rentals: $e');
+      //print('HomeScreen: Error loading rentals: $e');
       debugPrint('Error loading rentals: $e');
     }
   }
@@ -891,7 +891,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
               children: [
                 Expanded(
                   child: Text(
-                    rental.phoneNumber,
+                    _formatUsNumberDashed(rental.phoneNumber),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 20, letterSpacing: 0.4),
@@ -901,7 +901,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
                 _squareIconButton(
                   icon: Icons.copy,
                   tooltip: 'Copy number',
-                  onTap: () => _copyToClipboard(rental.phoneNumber),
+                  onTap: () => _copyToClipboard(_digitsOnly(rental.phoneNumber)),
                 ),
               ],
             ),
@@ -976,7 +976,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
           child: Icon(Icons.history, color: statusColor),
         ),
         title: Text(
-          rental.phoneNumber,
+          _formatUsNumberDashed(rental.phoneNumber),
           style: const TextStyle(fontWeight: FontWeight.w600),
         ),
         subtitle: Column(
@@ -1005,7 +1005,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
         ),
         trailing: IconButton(
           icon: const Icon(Icons.copy),
-          onPressed: () => _copyToClipboard(rental.phoneNumber),
+          onPressed: () => _copyToClipboard(_digitsOnly(rental.phoneNumber)),
           tooltip: 'Copy number',
         ),
       ),
@@ -1389,5 +1389,35 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
         ],
       ),
     );
+  }
+
+  // Format: show dashed 1-AAA-BBB-CCCC for US/E.164-like numbers; fall back to original if not 11 digits starting with '1'
+  String _formatUsNumberDashed(String input) {
+    final digits = _digitsOnly(input);
+    if (digits.length == 11 && digits.startsWith('1')) {
+      final a = digits.substring(1, 4);
+      final b = digits.substring(4, 7);
+      final c = digits.substring(7, 11);
+      return '1-$a-$b-$c';
+    }
+    // If 10 digits, assume US without country code
+    if (digits.length == 10) {
+      final a = digits.substring(0, 3);
+      final b = digits.substring(3, 6);
+      final c = digits.substring(6, 10);
+      return '$a-$b-$c';
+    }
+    return input;
+  }
+
+  String _digitsOnly(String input) {
+    final buf = StringBuffer();
+    for (final ch in input.runes) {
+      final c = String.fromCharCode(ch);
+      if (c.codeUnitAt(0) >= 48 && c.codeUnitAt(0) <= 57) {
+        buf.write(c);
+      }
+    }
+    return buf.toString();
   }
 }

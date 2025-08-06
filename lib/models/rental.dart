@@ -38,8 +38,11 @@ class Rental {
   final String? stripePaymentIntentId;
   @JsonKey(name: 'user_email')
   final String? userEmail;
+  // Wallet hold linkage for success-only billing
+  @JsonKey(name: 'wallet_hold_id')
+  final String? walletHoldId;
 
-  Rental({
+  const Rental({
     required this.id,
     required this.userId,
     required this.daisyRentalId,
@@ -56,6 +59,7 @@ class Rental {
     required this.expiresAt,
     this.stripePaymentIntentId,
     this.userEmail,
+    this.walletHoldId,
   });
 
   factory Rental.fromJson(Map<String, dynamic> json) => _$RentalFromJson(json);
@@ -78,6 +82,7 @@ class Rental {
     DateTime? expiresAt,
     String? stripePaymentIntentId,
     String? userEmail,
+    String? walletHoldId,
   }) {
     return Rental(
       id: id ?? this.id,
@@ -96,6 +101,7 @@ class Rental {
       expiresAt: expiresAt ?? this.expiresAt,
       stripePaymentIntentId: stripePaymentIntentId ?? this.stripePaymentIntentId,
       userEmail: userEmail ?? this.userEmail,
+      walletHoldId: walletHoldId ?? this.walletHoldId,
     );
   }
 

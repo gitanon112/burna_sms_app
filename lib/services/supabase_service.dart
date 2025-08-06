@@ -206,6 +206,47 @@ class SupabaseService {
   }
 
   // Wallet helpers
+  // NEW: Wallet hold RPC wrappers (server-authoritative). These assume RPCs exist.
+  // All functions enforce auth via auth.uid() on the server (SECURITY DEFINER).
+  Future<({String holdId, int balanceAfterCents})> walletCreateHold({
+    required int amountCents,
+    required String rentalId,
+    String? reason,
+  }) async {
+    if (!isAuthenticated) throw Exception('User not authenticated');
+    final res = await client.rpc('wallet_create_hold', params: {
+      'p_amount_cents': amountCents,
+      'p_rental_id': rentalId,
+      'p_reason': reason ?? 'Hold for rental $rentalId',
+    });
+    // Expected shape: { hold_id: uuid, balance_after_cents: int }
+    final holdId = (res['hold_id'] as String?) ?? '';
+    final bal = (res['balance_after_cents'] as num?)?.toInt() ?? 0;
+    if (holdId.isEmpty) {
+      throw Exception('wallet_create_hold returned no hold_id');
+    }
+    return (holdId: holdId, balanceAfterCents: bal);
+  }
+
+  Future<int> walletCommitHold({required String holdId}) async {
+    if (!isAuthenticated) throw Exception('User not authenticated');
+    final res = await client.rpc('wallet_commit_hold', params: {
+      'p_hold_id': holdId,
+    });
+    // Expected shape: { balance_after_cents: int }
+    return (res['balance_after_cents'] as num?)?.toInt() ?? await getWalletBalanceCents();
+  }
+
+  Future<int> walletRefundHold({required String holdId, String? reason}) async {
+    if (!isAuthenticated) throw Exception('User not authenticated');
+    final res = await client.rpc('wallet_refund_hold', params: {
+      'p_hold_id': holdId,
+      'p_reason': reason ?? 'Refund hold',
+    });
+    // Expected shape: { balance_after_cents: int }
+    return (res['balance_after_cents'] as num?)?.toInt() ?? await getWalletBalanceCents();
+  }
+
   /// Success-only debit: subtract from wallet and append ledger row atomically on server via RPC.
   /// Falls back to direct update if RPC not available.
   Future<void> debitWalletOnSuccess({
