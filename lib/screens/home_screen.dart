@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:simple_icons/simple_icons.dart';
 import '../services/auth_provider.dart';
 import '../services/supabase_service.dart';
 import '../services/burna_service.dart';
@@ -1222,27 +1223,37 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
   IconData _getServiceIcon(String serviceName) {
     final name = serviceName.toLowerCase();
 
-    if (name.contains('whatsapp')) return Icons.chat;
-    if (name.contains('telegram')) return Icons.send;
-    if (name.contains('discord')) return Icons.forum; // fixed
-    if (name.contains('instagram')) return Icons.camera_alt;
-    if (name.contains('facebook')) return Icons.facebook;
-    if (name.contains('twitter') || name.contains('x.com')) return Icons.alternate_email;
-    if (name.contains('google')) return Icons.search;
-    if (name.contains('amazon')) return Icons.shopping_bag;
-    if (name.contains('uber')) return Icons.local_taxi;
-    if (name.contains('airbnb')) return Icons.home;
-    if (name.contains('netflix')) return Icons.movie;
-    if (name.contains('spotify')) return Icons.music_note;
-    if (name.contains('paypal')) return Icons.payment;
-    if (name.contains('microsoft')) return Icons.computer;
-    if (name.contains('apple')) return Icons.phone_iphone;
-    if (name.contains('tinder')) return Icons.favorite;
-    if (name.contains('linkedin')) return Icons.work;
-    if (name.contains('github')) return Icons.code;
-    if (name.contains('dropbox')) return Icons.cloud;
-    if (name.contains('steam')) return Icons.games;
+    // Exact brand logos using simple_icons
+    if (name.contains('whatsapp')) return SimpleIcons.whatsapp;
+    if (name.contains('telegram')) return SimpleIcons.telegram;
+    if (name.contains('discord')) return SimpleIcons.discord;
+    if (name.contains('instagram')) return SimpleIcons.instagram;
+    if (name.contains('facebook')) return SimpleIcons.facebook;
+    if (name.contains('twitter') || name.contains('x.com') || name.contains('x ')) return SimpleIcons.x;
+    if (name.contains('google')) return SimpleIcons.google;
+    if (name.contains('youtube')) return SimpleIcons.youtube;
+    if (name.contains('amazon')) return SimpleIcons.amazon;
+    if (name.contains('uber')) return SimpleIcons.uber;
+    if (name.contains('airbnb')) return SimpleIcons.airbnb;
+    if (name.contains('netflix')) return SimpleIcons.netflix;
+    if (name.contains('spotify')) return SimpleIcons.spotify;
+    if (name.contains('paypal')) return SimpleIcons.paypal;
+    if (name.contains('microsoft')) return SimpleIcons.microsoft;
+    if (name.contains('apple')) return SimpleIcons.apple;
+    if (name.contains('tinder')) return SimpleIcons.tinder;
+    if (name.contains('linkedin')) return SimpleIcons.linkedin;
+    if (name.contains('github')) return SimpleIcons.github;
+    if (name.contains('dropbox')) return SimpleIcons.dropbox;
+    if (name.contains('steam')) return SimpleIcons.steam;
+    if (name.contains('snapchat')) return SimpleIcons.snapchat;
+    if (name.contains('tiktok')) return SimpleIcons.tiktok;
+    if (name.contains('pinterest')) return SimpleIcons.pinterest;
+    if (name.contains('reddit')) return SimpleIcons.reddit;
+    if (name.contains('twitch')) return SimpleIcons.twitch;
+    if (name.contains('venmo')) return SimpleIcons.venmo;
+    if (name.contains('cashapp')) return SimpleIcons.cashapp;
 
+    // Category-based fallbacks using Material icons
     if (name.contains('bank') || name.contains('finance')) return Icons.account_balance;
     if (name.contains('shop') || name.contains('store')) return Icons.store;
     if (name.contains('food') || name.contains('delivery')) return Icons.restaurant;
