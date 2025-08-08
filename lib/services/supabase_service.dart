@@ -219,9 +219,21 @@ class SupabaseService {
       'p_rental_id': rentalId,
       'p_reason': reason ?? 'Hold for rental $rentalId',
     });
-    // Expected shape: { hold_id: uuid, balance_after_cents: int }
-    final holdId = (res['hold_id'] as String?) ?? '';
-    final bal = (res['balance_after_cents'] as num?)?.toInt() ?? 0;
+    // Functions that RETURN TABLE(...) come back as a List with one row from PostgREST.
+    // Handle both List and Map for robustness.
+    Map<String, dynamic>? row;
+    if (res is List && res.isNotEmpty) {
+      final first = res.first;
+      if (first is Map) row = Map<String, dynamic>.from(first);
+    } else if (res is Map) {
+      row = Map<String, dynamic>.from(res);
+    }
+    if (row == null) {
+      throw Exception('wallet_create_hold returned no data');
+    }
+    // Expected shape per RPC: { hold_id: uuid, balance_after_cents: int }
+    final holdId = (row['hold_id'] as String?) ?? '';
+    final bal = (row['balance_after_cents'] as num?)?.toInt() ?? 0;
     if (holdId.isEmpty) {
       throw Exception('wallet_create_hold returned no hold_id');
     }
@@ -233,8 +245,16 @@ class SupabaseService {
     final res = await client.rpc('wallet_commit_hold', params: {
       'p_hold_id': holdId,
     });
-    // Expected shape: { balance_after_cents: int }
-    return (res['balance_after_cents'] as num?)?.toInt() ?? await getWalletBalanceCents();
+    // RETURN TABLE(balance_after_cents int) -> List with one row
+    Map<String, dynamic>? row;
+    if (res is List && res.isNotEmpty) {
+      final first = res.first;
+      if (first is Map) row = Map<String, dynamic>.from(first);
+    } else if (res is Map) {
+      row = Map<String, dynamic>.from(res);
+    }
+    if (row == null) return await getWalletBalanceCents();
+    return (row['balance_after_cents'] as num?)?.toInt() ?? await getWalletBalanceCents();
   }
 
   Future<int> walletRefundHold({required String holdId, String? reason}) async {
@@ -243,8 +263,16 @@ class SupabaseService {
       'p_hold_id': holdId,
       'p_reason': reason ?? 'Refund hold',
     });
-    // Expected shape: { balance_after_cents: int }
-    return (res['balance_after_cents'] as num?)?.toInt() ?? await getWalletBalanceCents();
+    // RETURN TABLE(balance_after_cents int) -> List with one row
+    Map<String, dynamic>? row;
+    if (res is List && res.isNotEmpty) {
+      final first = res.first;
+      if (first is Map) row = Map<String, dynamic>.from(first);
+    } else if (res is Map) {
+      row = Map<String, dynamic>.from(res);
+    }
+    if (row == null) return await getWalletBalanceCents();
+    return (row['balance_after_cents'] as num?)?.toInt() ?? await getWalletBalanceCents();
   }
 
   /// Success-only debit: subtract from wallet atomically on server via RPC.

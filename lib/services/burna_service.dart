@@ -6,6 +6,7 @@ import '../models/service_data.dart';
 import 'daisy_sms_client.dart';
 import 'supabase_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../constants/app_constants.dart';
 
 /// Main business service that replaces the Python backend
 /// Combines DaisySMS API calls with Supabase database operations
@@ -19,7 +20,7 @@ class BurnaService {
   Timer? _expiryTimer;
   
   // Business configuration
-  static const double markupMultiplier = 2.0;
+  static double get markupMultiplier => AppConstants.markupMultiplier;
   // TODO: Inject this from secure config (e.g., remote config, Supabase function, or dotenv in dev)
   static const String daisyApiKey = String.fromEnvironment('DAISY_API_KEY', defaultValue: 'XoEP1JKgg3XRqwq9D6XlfkE3yVTP0n');
   
@@ -67,29 +68,29 @@ class BurnaService {
         String? inferredServiceName;
 
         for (final countryEntry in countries.entries) {
-          final countryCode = countryEntry.key;
           final pricing = countryEntry.value;
- 
+
           if (!pricing.available) continue;
- 
+
           final originalPrice = pricing.price;
           final burnaPrice = (originalPrice * markupMultiplier).toStringAsFixed(2);
- 
+
           // Use Daisy-provided service name if present on pricing.name
           if ((pricing.name ?? '').trim().isNotEmpty && inferredServiceName == null) {
             inferredServiceName = pricing.name!.trim();
           }
- 
-          final resolvedCountryName = _getCountryName(countryCode);
- 
-          processedCountries[countryCode] = CountryService(
+
+          // US-only offering: present country name as United States for all entries
+          processedCountries['US'] = CountryService(
             originalPrice: originalPrice,
             burnaPrice: double.parse(burnaPrice),
             available: pricing.available,
             count: pricing.count,
-            name: resolvedCountryName,
+            name: 'United States',
             ttlSeconds: pricing.ttlSeconds, // from Daisy client
           );
+          // Only one country row needed for UI purposes
+          break;
         }
 
         if (processedCountries.isNotEmpty) {
@@ -231,7 +232,6 @@ class BurnaService {
         'status': 'active',
         'created_at': now.toIso8601String(),
         'expires_at': expiresAt.toIso8601String(),
-        'user_email': currentUser.email,
         'wallet_hold_id': walletHoldId,
       };
       
@@ -353,7 +353,21 @@ class BurnaService {
             final res = await Supabase.instance.client.rpc('get_active_hold_for_rental', params: {
               'p_rental_id': rental.id,
             });
-            holdId = (res as String?);
+            String? parsed;
+            if (res is String) {
+              parsed = res;
+            } else if (res is List && res.isNotEmpty) {
+              final first = res.first;
+              if (first is String) parsed = first;
+              if (first is Map && first['get_active_hold_for_rental'] is String) {
+                parsed = first['get_active_hold_for_rental'] as String;
+              }
+            } else if (res is Map) {
+              // Try common keys
+              final v = res['get_active_hold_for_rental'] ?? res['hold_id'] ?? res['id'];
+              if (v is String) parsed = v;
+            }
+            holdId = parsed;
           } catch (_) {}
         }
         if (holdId != null && holdId.isNotEmpty) {
@@ -401,44 +415,10 @@ class BurnaService {
   }
 
   /// Get pricing for a specific service and country
-  Future<Map<String, double>> getPricing(String serviceCode, String countryCode) async {
-    try {
-      final services = await getAvailableServices();
-      
-      if (services.services.containsKey(serviceCode)) {
-        final service = services.services[serviceCode]!;
-        if (service.countries.containsKey(countryCode)) {
-          final country = service.countries[countryCode]!;
-          return {
-            'original_price': country.originalPrice,
-            'burna_price': country.burnaPrice,
-          };
-        }
-      }
-      
-      throw Exception('Service or country not available');
-    } catch (e) {
-      throw Exception('Error getting pricing: $e');
-    }
-  }
+  // Removed (unused): getPricing(serviceCode, countryCode)
 
   /// Check if a service is available
-  Future<bool> isServiceAvailable(String serviceCode, String countryCode) async {
-    try {
-      final services = await getAvailableServices();
-      
-      if (services.services.containsKey(serviceCode)) {
-        final service = services.services[serviceCode]!;
-        if (service.countries.containsKey(countryCode)) {
-          return service.countries[countryCode]!.available;
-        }
-      }
-      
-      return false;
-    } catch (e) {
-      return false;
-    }
-  }
+  // Removed (unused): isServiceAvailable(serviceCode, countryCode)
 
   /// Get DaisySMS balance
   Future<double> getDaisyBalance() async {
@@ -499,6 +479,7 @@ class BurnaService {
       debugPrint('BurnaService: Found ${expiredRentals.length} expired rentals');
 
       for (final rental in expiredRentals) {
+        bool refundedThisRental = false;
         try {
           // Try to see if SMS arrived late
           final smsContent = await _daisyClient!.getSms(rental.daisyRentalId);
@@ -548,6 +529,7 @@ class BurnaService {
               final newBal = await _supabaseService.walletRefundHold(holdId: holdId, reason: 'Expired rental');
               try { onWalletBalanceChanged?.call(newBal); } catch (_) {}
               try { await _supabaseService.hardRefreshWalletBalanceCents(); } catch (_) {}
+              refundedThisRental = true;
             }
           } catch (e) {
             debugPrint('BurnaService: refund failed on expiry for ${rental.id}: $e');
@@ -563,8 +545,10 @@ class BurnaService {
               {'status': 'cancelled'},
             );
             final holdId = rental.walletHoldId;
-            if (holdId != null && holdId.isNotEmpty) {
-              await _supabaseService.walletRefundHold(holdId: holdId, reason: 'Expiry normalization');
+            if (!refundedThisRental && holdId != null && holdId.isNotEmpty) {
+              try {
+                await _supabaseService.walletRefundHold(holdId: holdId, reason: 'Expiry normalization');
+              } catch (_) {/* ignore second-attempt errors */}
               try { await _supabaseService.hardRefreshWalletBalanceCents(); } catch (_) {}
             }
           } catch (_) {}
@@ -580,32 +564,7 @@ class BurnaService {
     await _handleExpiredRentals();
   }
 
-  /// Get country/region name from Daisy code
-  String _getCountryName(String countryCode) {
-    final countries = const {
-      '0': 'Any Country',
-      '1': 'United States',
-      '7': 'Russia',
-      '44': 'United Kingdom',
-      '49': 'Germany',
-      '33': 'France',
-      '39': 'Italy',
-      '34': 'Spain',
-      '31': 'Netherlands',
-      '86': 'China',
-      '91': 'India',
-      '81': 'Japan',
-      '82': 'South Korea',
-      '61': 'Australia',
-      '55': 'Brazil',
-      '52': 'Mexico',
-      '380': 'Ukraine',
-      '48': 'Poland',
-    };
-    
-    // TODO: Extend with Daisy-specific mapping (e.g., '187') from Daisy documentation.
-    return countries[countryCode] ?? 'Region $countryCode';
-  }
+  // Removed (unused): _getCountryName
 
   /// Cleanup resources
   void dispose() {

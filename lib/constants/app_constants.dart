@@ -7,17 +7,29 @@ class AppConstants {
   // Set isSandbox = true to use Stripe test keys and webhook secret; false for live
   static const bool isSandbox = true;
 
-  // Supabase Configuration (unchanged)
-  static const String supabaseUrl = 'https://gbnfwvqlrztzkbbntyqa.supabase.co';
-  static const String supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdibmZ3dnFscnp0emtiYm50eXFhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM5MjQ5MzAsImV4cCI6MjA2OTUwMDkzMH0.yHz1zlwKg9jlARe_rP2U53Nvpj9KRGQp2z0F4kD-sMU';
+  // Supabase Configuration — prefer compile-time env via --dart-define
+  static const String supabaseUrl = String.fromEnvironment(
+    'SUPABASE_URL',
+    defaultValue: 'https://gbnfwvqlrztzkbbntyqa.supabase.co',
+  );
+  static const String supabaseAnonKey = String.fromEnvironment(
+    'SUPABASE_ANON_KEY',
+    defaultValue: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdibmZ3dnFscnp0emtiYm50eXFhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM5MjQ5MzAsImV4cCI6MjA2OTUwMDkzMH0.yHz1zlwKg9jlARe_rP2U53Nvpj9KRGQp2z0F4kD-sMU',
+  );
 
   // Python Backend API Configuration (existing burna-sms backend)
   static const String daisyProxyBaseUrl = 'http://localhost:8000';
 
   // Stripe (client-side)
   // Provide both test and live keys and choose based on isSandbox
-  static const String stripePublishableKeyLive = 'pk_live_51Q478YGfECbKKsYtNmGsk1VKVSJTPswBAtbBsOitCSNnnE1CgVCySsSg9DMFnTNgAwA1L8zDhVV9zQK7ZJR9G5HV00kSKVmgBr';
-  static const String stripePublishableKeyTest = 'pk_test_51RsdXEGtJ2lATOELu8bSwZD3crdGZa0mowV6TY8rEaTi4axqPT2lhjHB08oxZI50uDKzkEUTZMnSz1JnGHM7UTOO006EmHI0qL';
+  static const String stripePublishableKeyLive = String.fromEnvironment(
+    'STRIPE_PUBLISHABLE_KEY_LIVE',
+    defaultValue: 'pk_live_51Q478YGfECbKKsYtNmGsk1VKVSJTPswBAtbBsOitCSNnnE1CgVCySsSg9DMFnTNgAwA1L8zDhVV9zQK7ZJR9G5HV00kSKVmgBr',
+  );
+  static const String stripePublishableKeyTest = String.fromEnvironment(
+    'STRIPE_PUBLISHABLE_KEY_TEST',
+    defaultValue: 'pk_test_51RsdXEGtJ2lATOELu8bSwZD3crdGZa0mowV6TY8rEaTi4axqPT2lhjHB08oxZI50uDKzkEUTZMnSz1JnGHM7UTOO006EmHI0qL',
+  );
   static String get stripePublishableKey => isSandbox ? stripePublishableKeyTest : stripePublishableKeyLive;
 
   // App Settings

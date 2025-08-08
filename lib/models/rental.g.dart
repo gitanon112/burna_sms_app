@@ -23,6 +23,7 @@ Rental _$RentalFromJson(Map<String, dynamic> json) => Rental(
   expiresAt: DateTime.parse(json['expires_at'] as String),
   stripePaymentIntentId: json['stripe_payment_intent_id'] as String?,
   userEmail: json['user_email'] as String?,
+  walletHoldId: json['wallet_hold_id'] as String?,
 );
 
 Map<String, dynamic> _$RentalToJson(Rental instance) => <String, dynamic>{
@@ -42,4 +43,5 @@ Map<String, dynamic> _$RentalToJson(Rental instance) => <String, dynamic>{
   'expires_at': instance.expiresAt.toIso8601String(),
   'stripe_payment_intent_id': instance.stripePaymentIntentId,
   'user_email': instance.userEmail,
+  'wallet_hold_id': instance.walletHoldId,
 };

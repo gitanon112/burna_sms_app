@@ -13,6 +13,7 @@ CountryService _$CountryServiceFromJson(Map<String, dynamic> json) =>
       available: json['available'] as bool,
       count: (json['count'] as num).toInt(),
       name: json['name'] as String,
+      ttlSeconds: (json['ttl_seconds'] as num?)?.toInt(),
     );
 
 Map<String, dynamic> _$CountryServiceToJson(CountryService instance) =>
@@ -22,6 +23,7 @@ Map<String, dynamic> _$CountryServiceToJson(CountryService instance) =>
       'available': instance.available,
       'count': instance.count,
       'name': instance.name,
+      'ttl_seconds': instance.ttlSeconds,
     };
 
 ServiceData _$ServiceDataFromJson(Map<String, dynamic> json) => ServiceData(

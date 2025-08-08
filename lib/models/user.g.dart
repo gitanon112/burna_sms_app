@@ -14,6 +14,7 @@ User _$UserFromJson(Map<String, dynamic> json) => User(
   totalSpent: (json['total_spent'] as num?)?.toDouble() ?? 0.0,
   totalRentals: (json['total_rentals'] as num?)?.toInt() ?? 0,
   stripeCustomerId: json['stripe_customer_id'] as String?,
+  walletBalanceCents: (json['wallet_balance_cents'] as num?)?.toInt() ?? 0,
 );
 
 Map<String, dynamic> _$UserToJson(User instance) => <String, dynamic>{
@@ -24,4 +25,5 @@ Map<String, dynamic> _$UserToJson(User instance) => <String, dynamic>{
   'total_spent': instance.totalSpent,
   'total_rentals': instance.totalRentals,
   'stripe_customer_id': instance.stripeCustomerId,
+  'wallet_balance_cents': instance.walletBalanceCents,
 };
