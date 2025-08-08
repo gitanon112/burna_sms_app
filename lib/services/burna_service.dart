@@ -21,8 +21,9 @@ class BurnaService {
   
   // Business configuration
   static double get markupMultiplier => AppConstants.markupMultiplier;
-  // TODO: Inject this from secure config (e.g., remote config, Supabase function, or dotenv in dev)
-  static const String daisyApiKey = String.fromEnvironment('DAISY_API_KEY', defaultValue: 'XoEP1JKgg3XRqwq9D6XlfkE3yVTP0n');
+  // Inject from secure config (e.g., --dart-define, remote config, or Supabase function)
+  // No default key is provided to avoid accidental leakage; configure DAISY_API_KEY at runtime.
+  static const String daisyApiKey = String.fromEnvironment('DAISY_API_KEY', defaultValue: '');
   
   // Simple in-memory cache for services to reduce flicker/volatility
   ServicesResponse? _cachedServices;
@@ -132,16 +133,13 @@ class BurnaService {
       throw Exception('User not authenticated');
     }
 
-    // Read authoritative wallet for UX gating (server RPC will enforce again)
-    final walletCents = await _supabaseService.getWalletBalanceCents();
-    if (walletCents <= 0) {
-      throw Exception('Insufficient wallet balance. Please top up before purchasing a number.');
-    }
+  // Read current wallet for UX gating (server RPC will enforce again)
+  final walletCents = await _supabaseService.getWalletBalanceCents();
 
     debugPrint('BurnaService: User authenticated - ${currentUser.email}');
 
     try {
-      // Get service pricing
+  // Get service pricing
       debugPrint('BurnaService: Getting available services...');
       final services = await getAvailableServices();
 
@@ -160,8 +158,14 @@ class BurnaService {
 
       debugPrint('BurnaService: Found pricing - original: ${pricingRef.originalPrice}, burna: ${pricingRef.burnaPrice}');
 
-      // 1) Create a wallet HOLD for success-only debit (server-authoritative)
+      // Ensure wallet covers the burna price before placing a hold
       final burnaPriceCents = (pricingRef.burnaPrice * 100).round();
+      if (walletCents < burnaPriceCents) {
+        throw Exception('Insufficient wallet balance (need $burnaPriceCents cents). Please add funds.');
+      }
+
+      // 1) Create a wallet HOLD for success-only debit (server-authoritative)
+  // Already computed above
       final rentalId = const Uuid().v4(); // provision an id up front to link hold metadata
       late final String walletHoldId;
       try {
@@ -223,7 +227,8 @@ class BurnaService {
         'user_id': currentUser.id,
         'daisy_rental_id': daisyRental.id,
         'service_code': serviceCode,
-        'service_name': serviceCode.toUpperCase(),
+        // Store human-friendly name if available; fallback to uppercased code
+        'service_name': svc.name.isNotEmpty ? svc.name : serviceCode.toUpperCase(),
         'country_code': resolvedCountryCode,
         'country_name': resolvedCountryName,
         'phone_number': daisyRental.number,
@@ -242,17 +247,7 @@ class BurnaService {
         await _supabaseService.hardRefreshWalletBalanceCents();
       } catch (_) {}
       
-      // Update user stats
-      debugPrint('BurnaService: Updating user profile stats...');
-      final userProfile = await _supabaseService.getCurrentUserProfile();
-      if (userProfile != null) {
-        final updatedProfile = userProfile.copyWith(
-          totalSpent: userProfile.totalSpent + pricingRef.burnaPrice,
-          totalRentals: userProfile.totalRentals + 1,
-          updatedAt: now,
-        );
-        await _supabaseService.updateUserProfile(updatedProfile);
-      }
+  // Do NOT update profile totals here. Totals should only reflect successful rentals (on SMS receipt).
       
       debugPrint('BurnaService: Purchase complete!');
       return rental;
@@ -308,6 +303,21 @@ class BurnaService {
               reason: 'SMS code received for ${updatedRental.serviceName} (${updatedRental.countryName})',
             );
             try { final c = await _supabaseService.hardRefreshWalletBalanceCents(); onWalletBalanceChanged?.call(c); } catch (_) {}
+          }
+          // Update profile totals on success-only path
+          try {
+            final profile = await _supabaseService.getCurrentUserProfile();
+            if (profile != null) {
+              await _supabaseService.updateUserProfile(
+                profile.copyWith(
+                  totalSpent: profile.totalSpent + updatedRental.burnaPrice,
+                  totalRentals: profile.totalRentals + 1,
+                  updatedAt: DateTime.now().toUtc(),
+                ),
+              );
+            }
+          } catch (e) {
+            debugPrint('BurnaService: failed to update profile totals on SMS success: $e');
           }
         } catch (e) {
           // Non-fatal for UI: log and continue; balance can be reconciled later if needed.
@@ -509,6 +519,21 @@ class BurnaService {
               }
             } catch (e) {
               debugPrint('BurnaService: commit/debit failed on late SMS for ${rental.id}: $e');
+            }
+            // Update profile totals on success-only path (late SMS)
+            try {
+              final profile = await _supabaseService.getCurrentUserProfile();
+              if (profile != null) {
+                await _supabaseService.updateUserProfile(
+                  profile.copyWith(
+                    totalSpent: profile.totalSpent + rental.burnaPrice,
+                    totalRentals: profile.totalRentals + 1,
+                    updatedAt: DateTime.now().toUtc(),
+                  ),
+                );
+              }
+            } catch (e) {
+              debugPrint('BurnaService: failed to update profile totals on late SMS: $e');
             }
             debugPrint('BurnaService: Completed rental ${rental.id} via late SMS');
             continue;

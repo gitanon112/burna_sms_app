@@ -64,7 +64,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   // Welcome Card
                   Container(
                     decoration: BoxDecoration(
-                      color: const Color(0xFF0F172A).withValues(alpha: 0.9),
+                      color: const Color(0xFF0F172A).withOpacity(0.9),
                       borderRadius: BorderRadius.circular(16),
                       border: Border.all(color: const Color(0x1AFFFFFF)),
                       boxShadow: const [

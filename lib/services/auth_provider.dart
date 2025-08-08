@@ -138,21 +138,24 @@ class AuthProvider with ChangeNotifier {
   // Authentication methods
   Future<bool> signInWithGoogle() async {
     try {
-      _status = AuthStatus.loading;
+      // Do not leave the app in a global loading state; launch OAuth and immediately
+      // keep the app in unauthenticated state until Supabase emits a signedIn event.
       _errorMessage = null;
       notifyListeners();
 
-      final success = await _supabaseService.signInWithGoogle();
-      
-      if (success) {
-        // The auth state change listener will handle the rest
+      final launched = await _supabaseService.signInWithGoogle();
+
+      // Immediately ensure the wrapper shows the login/home instead of a spinner
+      // while the external OAuth flow is in progress or cancelled.
+      _status = AuthStatus.unauthenticated;
+      notifyListeners();
+
+      if (launched) {
+        // When/if the user completes OAuth, onAuthStateChange(signedIn) will flip state.
         return true;
-      } else {
-        _status = AuthStatus.unauthenticated;
-        _errorMessage = 'Google sign-in failed';
-        notifyListeners();
-        return false;
       }
+      _errorMessage = 'Google sign-in failed to start';
+      return false;
     } catch (e) {
       _status = AuthStatus.unauthenticated;
       _errorMessage = 'Sign-in error: $e';

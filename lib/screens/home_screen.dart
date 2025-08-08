@@ -113,6 +113,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
             callback: (payload) async {
               await _loadActiveRentals();
               _syncRentalPollers();
+              // Also refresh profile totals in case a rental transitioned to completed
+              try {
+                if (mounted) {
+                  final ap = Provider.of<AuthProvider>(context, listen: false);
+                  await ap.refreshUserProfile();
+                }
+              } catch (_) {}
             },
           )
           .subscribe();
@@ -158,6 +165,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
                 backgroundColor: Colors.green,
               ),
             );
+            // Refresh profile totals immediately (spent + rentals)
+            try {
+              final ap = Provider.of<AuthProvider>(context, listen: false);
+              await ap.refreshUserProfile();
+            } catch (_) {}
             return;
           }
           final nowUtc = DateTime.now().toUtc();
@@ -193,6 +205,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
 
     _daisyService.stopExpiryMonitoring();
 
+    // Unsubscribe wallet changes to avoid leaks
+    try {
+      _supabaseService.unsubscribeWalletChanges();
+    } catch (_) {}
+
     try {
       _rentalsChannel?.unsubscribe();
       _rentalsChannel = null;
@@ -205,17 +222,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     super.dispose();
   }
 
-  // Ensure _loadActiveRentals remains single definition and uses UTC in linger cleanup.
-  // Example patch around linger cleanup:
-  // _lingerUntil.removeWhere((_, until) => until.isBefore(DateTime.now()));
-  // becomes:
-  // _lingerUntil.removeWhere((_, until) => until.isBefore(DateTime.now().toUtc()));
-
-  // Ensure Check SMS button is not referenced anymore in active rentals rendering.
-  // Replace calls to _buildEnhancedRentalCard with _buildCompactRentalTile already added earlier.
-
-  // No changes needed to BillingService usage; just ensure import exists at top.
-  // Ensure WALLET pill is not referenced anymore in active rentals rendering
+  // Ensure WALLET pill value is refreshed when app resumes
   Future<void> _onResumed() async {
     try {
       final cents = await _supabaseService.hardRefreshWalletBalanceCents();
@@ -234,28 +241,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
   }
 
 
-  // Ensure _loveActiveRentals remains single definition and uses UTC in linger cleanup.
-  // Example patch around linger cleanup:
-  // _lingerUntil.removeWhere((_, until) => until.isBefore(DateTime.now()));
-  // becomes:
-  // _lingerUntil.removeWhere((_, until) => until.isBefore(DateTime.now().toUtc()));
-
-  // Ensure Check SMS button is not referenced anymore in active rentals rendering.
-  // Replace calls to _buildEnhancedRentalCard with _buildCompactRentalTile already added earlier.
-
-  // No changes needed to BillingService usage; just ensure import exists at top.
-
-
-  // Ensure _loadActiveRentals remains single definition and uses UTC in linger cleanup.
-  // Example patch around linger cleanup:
-  // _lingerUntil.removeWhere((_, until) => until.isBefore(DateTime.now()));
-  // becomes:
-  // _lingerUntil.removeWhere((_, until) => until.isBefore(DateTime.now().toUtc()));
-
-  // Ensure Check SMS button is not referenced anymore in active rentals rendering.
-  // Replace calls to _buildEnhancedRentalCard with _buildCompactRentalTile already added earlier.
-
-  // No changes needed to BillingService usage; just ensure import exists at top.
   void _subscribeToProfileBalance() {
     _supabaseService.subscribeToWalletChanges((cents) {
       if (!mounted) return;
@@ -321,8 +306,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     }
   }
 
-  List<String> _popularWhitelist() => ['whatsapp', 'google', 'twitter', 'instagram', 'facebook'];
-  List<String> _popularWhitelistByName() => ['whatsapp', 'google', 'twitter', 'instagram', 'facebook'];
+  List<String> _popularWhitelist() => ['whatsapp', 'twitter', 'instagram', 'facebook', 'discord', 'linkedin'];
+  List<String> _popularWhitelistByName() => ['whatsapp', 'twitter', 'instagram', 'facebook', 'discord', 'linkedin', 'google / gmail / youtube'];
+  bool _isGoogleBundleName(String name) {
+    final n = name.toLowerCase();
+    final hasGoogle = n.contains('google');
+    final hasBundlePart = n.contains('youtube') || n.contains('gmail');
+    final isExcludedVariant = n.contains('voice') || n.contains('messenger') || n.contains('chat');
+    return hasGoogle && hasBundlePart && !isExcludedVariant;
+  }
   List<ServiceData> _getPopularServices() {
     final allow = _popularWhitelist();
     final out = <ServiceData>[];
@@ -330,7 +322,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
       final code = service.serviceCode.toLowerCase();
       final name = service.name.toLowerCase();
       // Keep the full countries map so pricing uses true min across availableCountries
-      if (allow.contains(code) || _popularWhitelistByName().any((n) => name.contains(n))) {
+      if (allow.contains(code) || _popularWhitelistByName().any((n) => name.contains(n)) || _isGoogleBundleName(name)) {
         out.add(service);
       }
     }
@@ -464,28 +456,55 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
             onPressed: () async {
               // Capture messenger early to avoid context after async gaps
               final messenger = ScaffoldMessenger.of(context);
-              // Prompt for any amount in USD
+              // Styled dialog to match the rest of the UI
               final controller = TextEditingController(text: '5.00');
-              final amount = await showDialog<double?> (
+              final amount = await showDialog<double?>(
                 context: context,
                 builder: (ctx) => AlertDialog(
-                  title: const Text('Add Funds'),
+                  backgroundColor: const Color(0xFF0F172A),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(18),
+                    side: const BorderSide(color: Color(0x1AFFFFFF)),
+                  ),
+                  title: const Text('Add Funds', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
                   content: TextField(
                     controller: controller,
+                    style: const TextStyle(color: Colors.white),
                     keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       labelText: 'Amount (USD)',
+                      labelStyle: const TextStyle(color: Colors.white70),
                       hintText: 'e.g. 5.00',
+                      hintStyle: const TextStyle(color: Colors.white54),
+                      filled: true,
+                      fillColor: const Color(0xFF111827),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(color: Color(0x1AFFFFFF)),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(color: Color(0x33FFFFFF), width: 1.5),
+                      ),
                     ),
                   ),
+                  actionsPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   actions: [
-                    TextButton(onPressed: () => Navigator.pop(ctx, null), child: const Text('Cancel')),
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx, null),
+                      child: const Text('Cancel', style: TextStyle(color: Colors.white70)),
+                    ),
                     ElevatedButton(
                       onPressed: () {
                         final v = double.tryParse(controller.text.trim());
                         Navigator.pop(ctx, v);
                       },
-                      child: const Text('Continue'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF1DE9B6),
+                        foregroundColor: Colors.black,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      child: const Text('Continue', style: TextStyle(fontWeight: FontWeight.w800)),
                     ),
                   ],
                 ),
@@ -836,7 +855,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     final isExpired = expiresUtc.isBefore(nowUtc);
     final timeRemaining = isExpired ? Duration.zero : expiresUtc.difference(nowUtc);
     final status = rental.status.toLowerCase();
-    final displayService = _expandedServiceName(rental.serviceName); // use full name
+  final displayService = _displayServiceFor(rental); // prefer friendly name
 
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
@@ -1024,7 +1043,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
   Widget _buildHistoryRentalTile(Rental rental) {
     final created = rental.createdAt.toLocal();
     final dateStr = '${created.year}-${created.month.toString().padLeft(2, '0')}-${created.day.toString().padLeft(2, '0')} ${created.hour.toString().padLeft(2, '0')}:${created.minute.toString().padLeft(2, '0')}';
-    final displayService = _expandedServiceName(rental.serviceName);
+  final displayService = _displayServiceFor(rental);
     final effectiveStatus = rental.status.toLowerCase();
     final statusColor = _getStatusColor(effectiveStatus);
     return Container(
@@ -1039,7 +1058,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
         dense: true,
         visualDensity: const VisualDensity(horizontal: 0, vertical: -2),
         leading: CircleAvatar(
-          backgroundColor: statusColor.withValues(alpha: 0.15),
+          backgroundColor: statusColor.withOpacity(0.15),
           child: Icon(Icons.phone_iphone, color: statusColor),
         ),
         title: Text(
@@ -1072,10 +1091,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
             ),
             const SizedBox(width: 8),
             // Compact right-side actions to avoid vertical overflow
-            Column(
+      Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                _chip(effectiveStatus.toUpperCase(), color: Colors.transparent, borderColor: statusColor.withValues(alpha: 0.5)),
+        _chip(effectiveStatus.toUpperCase(), color: Colors.transparent, borderColor: statusColor.withOpacity(0.5)),
                 const SizedBox(height: 6),
                 _squareIconButton(icon: Icons.copy, tooltip: 'Copy number', onTap: () => _copyToClipboard(_digitsOnly(rental.phoneNumber))),
               ],
@@ -1090,10 +1109,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     final created = DateTime.tryParse(p['created_at']?.toString() ?? '')?.toLocal();
     final dateStr = created == null ? '' : '${created.year}-${created.month.toString().padLeft(2, '0')}-${created.day.toString().padLeft(2, '0')} ${created.hour.toString().padLeft(2, '0')}:${created.minute.toString().padLeft(2, '0')}';
     final cents = (p['amount_cents'] as num?)?.toInt() ?? 0;
-    final status = (p['status']?.toString() ?? '').toLowerCase();
-    final statusColor = _getStatusColor(status == 'succeeded' ? 'completed' : status);
-    final pi = (p['payment_intent_id']?.toString() ?? '');
-    final shortPi = pi.length > 18 ? '${pi.substring(0,18)}...' : pi;
+  final statusColor = _getStatusColor('completed');
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
       decoration: BoxDecoration(
@@ -1107,7 +1123,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
         minVerticalPadding: 6,
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
         leading: CircleAvatar(
-          backgroundColor: statusColor.withValues(alpha: 0.15),
+          backgroundColor: statusColor.withOpacity(0.15),
           child: const Icon(Icons.receipt_long, color: Colors.white),
         ),
         title: Text(
@@ -1124,17 +1140,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
                 children: [
                   if (dateStr.isNotEmpty)
                     Text(dateStr, style: const TextStyle(color: Colors.white70, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
-                  Text('Status: ${p['status']}', style: const TextStyle(color: Colors.white70, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
-                  Text('Intent: $shortPi', style: const TextStyle(color: Colors.white54, fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
                 ],
               ),
             ),
-            const SizedBox(width: 8),
-            _chip(
-              status.toUpperCase(),
-              color: Colors.transparent,
-              borderColor: statusColor.withValues(alpha: 0.5),
-            ),
+      const SizedBox(width: 8),
           ],
         ),
       ),
@@ -1301,20 +1310,30 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Cancel Rental'),
-        content: const Text('Are you sure you want to cancel this rental? This action cannot be undone.'),
+        backgroundColor: const Color(0xFF0F172A),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+          side: const BorderSide(color: Color(0x1AFFFFFF)),
+        ),
+        title: const Text('Cancel Rental', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
+        content: const Text(
+          'Are you sure you want to cancel this rental? This action cannot be undone.',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actionsPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('No'),
+            child: const Text('No', style: TextStyle(color: Colors.white70)),
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(context, true),
             style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
+              backgroundColor: Colors.red.shade600,
               foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             ),
-            child: const Text('Yes, Cancel'),
+            child: const Text('Yes, Cancel', style: TextStyle(fontWeight: FontWeight.w700)),
           ),
         ],
       ),
@@ -1323,8 +1342,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     if (confirm == true) {
       try {
         await _daisyService.cancelRental(rental.id);
-        
-        await _supabaseService.updateRental(rental.id, {'status': 'cancelled'});
+        // BurnaService.cancelRental already updates status and refunds hold
         await _loadActiveRentals();
         
         if (mounted) {
@@ -1408,8 +1426,24 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     );
   }
 
-  // Expand known abbreviations to full service names for display
-  String _expandedServiceName(String input) {
+  // Compute display service name for a rental
+  String _displayServiceFor(Rental rental) {
+    // Prefer DB-provided serviceName if it's already friendly-looking (contains space or capitalized brand)
+    final dbName = rental.serviceName.trim();
+    if (dbName.isNotEmpty && dbName.toLowerCase() != rental.serviceCode.toLowerCase()) {
+      return dbName;
+    }
+    // Try to resolve from available services map
+    final match = _availableServices.firstWhere(
+      (s) => s.serviceCode.toLowerCase() == rental.serviceCode.toLowerCase(),
+      orElse: () => ServiceData(serviceCode: rental.serviceCode, name: dbName.isNotEmpty ? dbName : rental.serviceCode.toUpperCase(), countries: {}),
+    );
+    if (match.name.isNotEmpty) return match.name;
+    // Last resort, some friendly expansions for common short codes
+    return _expandCommonAbbrevs(dbName.isNotEmpty ? dbName : rental.serviceCode.toUpperCase());
+  }
+
+  String _expandCommonAbbrevs(String input) {
     final map = <String, String>{
       'fb': 'Facebook',
       'ig': 'Instagram',
@@ -1467,6 +1501,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
   }
 
   Widget _codeChip(String code) {
+    
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
