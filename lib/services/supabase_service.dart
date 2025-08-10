@@ -4,7 +4,30 @@ import '../models/user.dart' as app_user;
 import '../models/rental.dart';
 import 'package:flutter/foundation.dart';
 
-class SupabaseService {
+/// Lightweight interface to allow mocking in tests without subclassing the
+/// singleton implementation.
+abstract class ISupabaseService {
+  User? get currentUser;
+  bool get isAuthenticated;
+  Stream<AuthState> get authStateStream;
+  Future<bool> signInWithGoogle();
+  Future<void> signOut();
+  Future<int> getWalletBalanceCents();
+  Future<({String holdId, int balanceAfterCents})> walletCreateHold({required int amountCents, required String rentalId, String? reason});
+  Future<int> walletCommitHold({required String holdId});
+  Future<int> walletRefundHold({required String holdId, String? reason});
+  Future<void> debitWalletOnSuccess({required String userId, required int amountCents, required String rentalId, required String reason});
+  Future<List<Rental>> getUserRentals();
+  Future<Rental?> getRentalById(String rentalId);
+  Future<Rental> createRental(Map<String, dynamic> rentalData);
+  Future<Rental> updateRental(String rentalId, Map<String, dynamic> updates);
+  Future<int> hardRefreshWalletBalanceCents();
+  Future<app_user.User?> getCurrentUserProfile();
+  Future<app_user.User> createUserProfile(User authUser);
+  Future<app_user.User> updateUserProfile(app_user.User user);
+}
+
+class SupabaseService implements ISupabaseService {
   static final SupabaseService _instance = SupabaseService._internal();
   factory SupabaseService() => _instance;
   SupabaseService._internal();
@@ -20,13 +43,17 @@ class SupabaseService {
   }
 
   // Auth helpers
+  @override
   User? get currentUser => client.auth.currentUser;
+  @override
   bool get isAuthenticated => currentUser != null;
   
   // Auth state stream
+  @override
   Stream<AuthState> get authStateStream => client.auth.onAuthStateChange;
 
   // Authentication methods
+  @override
   Future<bool> signInWithGoogle() async {
     try {
       await client.auth.signInWithOAuth(
@@ -46,11 +73,13 @@ class SupabaseService {
     }
   }
 
+  @override
   Future<void> signOut() async {
     await client.auth.signOut();
   }
 
   // User profile management
+  @override
   Future<app_user.User?> getCurrentUserProfile() async {
     if (!isAuthenticated) return null;
 
@@ -76,6 +105,7 @@ class SupabaseService {
     }
   }
 
+  @override
   Future<app_user.User> createUserProfile(User authUser) async {
     final userProfile = {
       'id': authUser.id,
@@ -96,6 +126,7 @@ class SupabaseService {
     return app_user.User.fromJson(response);
   }
 
+  @override
   Future<app_user.User> updateUserProfile(app_user.User user) async {
     // Never push wallet_balance_cents from client; server/webhook controls it.
     final payload = {
@@ -115,6 +146,7 @@ class SupabaseService {
   }
 
   // Rental management
+  @override
   Future<List<Rental>> getUserRentals() async {
     if (!isAuthenticated) return [];
 
@@ -127,6 +159,7 @@ class SupabaseService {
     return response.map<Rental>((json) => Rental.fromJson(json)).toList();
   }
 
+  @override
   Future<Rental?> getRentalById(String rentalId) async {
     if (!isAuthenticated) return null;
 
@@ -142,6 +175,7 @@ class SupabaseService {
     return Rental.fromJson(response);
   }
 
+  @override
   Future<Rental> createRental(Map<String, dynamic> rentalData) async {
     if (!isAuthenticated) throw Exception('User not authenticated');
 
@@ -154,6 +188,7 @@ class SupabaseService {
     return Rental.fromJson(response);
   }
 
+  @override
   Future<Rental> updateRental(String rentalId, Map<String, dynamic> updates) async {
     if (!isAuthenticated) throw Exception('User not authenticated');
 
@@ -208,6 +243,7 @@ class SupabaseService {
   // Wallet helpers
   // NEW: Wallet hold RPC wrappers (server-authoritative). These assume RPCs exist.
   // All functions enforce auth via auth.uid() on the server (SECURITY DEFINER).
+  @override
   Future<({String holdId, int balanceAfterCents})> walletCreateHold({
     required int amountCents,
     required String rentalId,
@@ -240,6 +276,7 @@ class SupabaseService {
     return (holdId: holdId, balanceAfterCents: bal);
   }
 
+  @override
   Future<int> walletCommitHold({required String holdId}) async {
     if (!isAuthenticated) throw Exception('User not authenticated');
     final res = await client.rpc('wallet_commit_hold', params: {
@@ -257,6 +294,7 @@ class SupabaseService {
     return (row['balance_after_cents'] as num?)?.toInt() ?? await getWalletBalanceCents();
   }
 
+  @override
   Future<int> walletRefundHold({required String holdId, String? reason}) async {
     if (!isAuthenticated) throw Exception('User not authenticated');
     final res = await client.rpc('wallet_refund_hold', params: {
@@ -277,6 +315,7 @@ class SupabaseService {
 
   /// Success-only debit: subtract from wallet atomically on server via RPC.
   /// Removed unsafe client fallback that violated RLS.
+  @override
   Future<void> debitWalletOnSuccess({
     required String userId,
     required int amountCents,
@@ -297,6 +336,7 @@ class SupabaseService {
     }
   }
   
+  @override
   Future<int> getWalletBalanceCents() async {
     try {
       if (!isAuthenticated) return 0;
@@ -370,6 +410,7 @@ class SupabaseService {
   }
   
   /// Hard wallet refresh that bypasses any in-memory state and forces a non-cached read.
+  @override
   Future<int> hardRefreshWalletBalanceCents() async {
     if (!isAuthenticated) return 0;
     final raw = await client

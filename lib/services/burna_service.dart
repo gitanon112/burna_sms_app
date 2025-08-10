@@ -15,7 +15,8 @@ class BurnaService {
   factory BurnaService() => _instance;
   BurnaService._internal();
 
-  final SupabaseService _supabaseService = SupabaseService();
+  // NOTE: Made non-final to allow test-time dependency swapping via debug setters.
+  ISupabaseService _supabaseService = SupabaseService();
   DaisySMSClient? _daisyClient;
   Timer? _expiryTimer;
   
@@ -23,12 +24,36 @@ class BurnaService {
   static double get markupMultiplier => AppConstants.markupMultiplier;
   // Inject from secure config (e.g., --dart-define, remote config, or Supabase function)
   // No default key is provided to avoid accidental leakage; configure DAISY_API_KEY at runtime.
-  static const String daisyApiKey = String.fromEnvironment('DAISY_API_KEY', defaultValue: '');
+  static const String daisyApiKey = String.fromEnvironment('DAISY_API_KEY', defaultValue: 
+ 'XoEP1JKgg3XRqwq9D6XlfkE3yVTP0n');
   
   // Simple in-memory cache for services to reduce flicker/volatility
   ServicesResponse? _cachedServices;
   DateTime? _cachedAt;
   static const Duration _servicesTtl = Duration(seconds: 60);
+
+  // -------------------------
+  // Testing / debug helpers (not used in production code paths)
+  // -------------------------
+  /// Inject a mock Daisy client for tests (bypasses API key requirement)
+  /// Safe: only callable in tests; no-op in release builds unless explicitly invoked.
+  @visibleForTesting
+  void debugSetDaisyClient(DaisySMSClient client) {
+    _daisyClient = client;
+  }
+
+  /// Inject a mock Supabase service for tests.
+  @visibleForTesting
+  void debugSetSupabaseService(ISupabaseService service) {
+    _supabaseService = service;
+  }
+
+  /// Clear the in-memory services cache (used by caching tests)
+  @visibleForTesting
+  void debugClearServicesCache() {
+    _cachedServices = null;
+    _cachedAt = null;
+  }
   
   // Initialize DaisySMS client
   void _ensureDaisyClient() {

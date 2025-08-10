@@ -6,7 +6,7 @@ import '../models/user.dart' as app_user;
 enum AuthStatus { loading, authenticated, unauthenticated }
 
 class AuthProvider with ChangeNotifier {
-  final SupabaseService _supabaseService = SupabaseService();
+  final ISupabaseService _supabaseService;
   
   AuthStatus _status = AuthStatus.loading;
   app_user.User? _userProfile;
@@ -18,7 +18,7 @@ class AuthProvider with ChangeNotifier {
   bool get isLoading => _status == AuthStatus.loading;
   String? get errorMessage => _errorMessage;
 
-  AuthProvider() {
+  AuthProvider({ISupabaseService? supabaseService}) : _supabaseService = supabaseService ?? SupabaseService() {
     _initialize();
   }
 
